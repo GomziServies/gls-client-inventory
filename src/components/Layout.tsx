@@ -93,13 +93,9 @@ export default function Layout({
           </div>
         </div>
 
-        {/* Right Side: Gomzi Life Science & GN Logo */}
+        {/* Right Side: Gomzi Life Science Logo */}
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-slate-700 tracking-tight hidden sm:inline-block">
-            Gomzi Life Science
-          </span>
-          <div className="h-6 w-[1px] bg-slate-200 hidden sm:block" />
-          <img src="/gomzi-nutrition.png" alt="GN Logo" className="h-8 md:h-9 w-auto object-contain" />
+          <img src="/gomzi-life-science.png" alt="Gomzi Life Science Logo" className="h-8 md:h-9 w-auto object-contain" />
         </div>
       </header>
 
