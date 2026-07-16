@@ -8,6 +8,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { toast } from "sonner";
+import { BASE_API_URL } from "../config";
 
 interface ProductItem {
   item_name: string;
@@ -100,9 +101,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
 
   const handleDownloadFile = (url: string, filename: string) => {
     try {
-      const baseApiUrl = import.meta.env.PROD
-        ? "/public/v1"
-        : "http://localhost:80/public/v1";
+      const baseApiUrl = BASE_API_URL;
 
       const downloadProxyUrl = `${baseApiUrl}/download-file?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
       window.location.href = downloadProxyUrl;
@@ -120,9 +119,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
     setError(null);
 
     try {
-      const baseApiUrl = import.meta.env.PROD
-        ? "/public/v1"
-        : "http://localhost:80/public/v1";
+      const baseApiUrl = BASE_API_URL;
 
       const res = await fetch(`${baseApiUrl}/gn-clients/production-process?mobile=${mobileNumber}`);
       if (!res.ok) {
@@ -157,9 +154,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
   const fetchClientDetails = async (clientId: string) => {
     setDetailsLoading(true);
     try {
-      const baseApiUrl = import.meta.env.PROD
-        ? "/public/v1"
-        : "http://localhost:80/public/v1";
+      const baseApiUrl = BASE_API_URL;
 
       const res = await fetch(`${baseApiUrl}/gn-clients/production-process/details?clientId=${clientId}`);
       if (!res.ok) {
@@ -199,9 +194,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
 
     setSubmittingAction(true);
     try {
-      const baseApiUrl = import.meta.env.PROD
-        ? "/public/v1"
-        : "http://localhost:80/public/v1";
+      const baseApiUrl = BASE_API_URL;
 
       const res = await fetch(`${baseApiUrl}/gn-clients/label-design/approve-reject`, {
         method: 'POST',
@@ -254,9 +247,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
 
     setSubmittingAction(true);
     try {
-      const baseApiUrl = import.meta.env.PROD
-        ? "/public/v1"
-        : "http://localhost:80/public/v1";
+      const baseApiUrl = BASE_API_URL;
 
       const res = await fetch(`${baseApiUrl}/gn-clients/client-label/approve-reject`, {
         method: 'POST',
