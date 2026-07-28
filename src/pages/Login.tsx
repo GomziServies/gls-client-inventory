@@ -21,7 +21,9 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [timer, setTimer] = useState<number>(0);
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
-  const baseApiUrl = BASE_API_URL;
+  const baseApiUrl = import.meta.env.PROD
+    ? "/public/v1"
+    : `http://${typeof window !== "undefined" ? window.location.hostname : "localhost"}:89/public/v1`;
 
   // Countdown timer for Resend OTP
   useEffect(() => {
@@ -90,15 +92,16 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   };
 
   const handleOtpChange = (index: number, value: string) => {
-    if (!/^\d*$/.test(value)) return; // Only allow numbers
+    const numericValue = value.replace(/\D/g, "");
+    if (!numericValue && value !== "") return; // Reject non-numeric input
 
     const newOtp = [...otp];
-    // Keep only the last character entered
-    newOtp[index] = value.substring(value.length - 1);
+    // Keep only the last digit entered
+    newOtp[index] = numericValue.substring(numericValue.length - 1);
     setOtp(newOtp);
 
     // Shift focus to next input
-    if (value && index < 5) {
+    if (numericValue && index < 5) {
       otpInputsRef.current[index + 1]?.focus();
     }
   };
@@ -112,12 +115,17 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
   const handleOtpPaste = (e: ClipboardEvent<HTMLInputElement>) => {
     e.preventDefault();
-    const pastedData = e.clipboardData.getData("text").trim();
-    if (!/^\d{6}$/.test(pastedData)) return;
+    const pastedData = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    if (!pastedData) return;
 
     const digits = pastedData.split("");
-    setOtp(digits);
-    otpInputsRef.current[5]?.focus();
+    const newOtp = Array(6).fill("");
+    digits.forEach((d, i) => {
+      newOtp[i] = d;
+    });
+    setOtp(newOtp);
+    const lastIdx = Math.min(digits.length - 1, 5);
+    otpInputsRef.current[lastIdx]?.focus();
   };
 
   // Step 2: OTP Verification
@@ -172,23 +180,23 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   };
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center bg-slate-50 overflow-hidden">
+    <div className="relative min-h-[100dvh] w-full max-w-full flex items-center justify-center bg-slate-50 overflow-hidden overflow-x-hidden">
       {/* Decorative backdrop shapes */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-primary-100/30 blur-3xl" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-100/30 blur-3xl" />
+      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-primary-100/30 blur-3xl pointer-events-none" />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-100/30 blur-3xl pointer-events-none" />
 
-      <div className="relative w-full max-w-[460px] p-6 animate-in fade-in slide-in-from-bottom-8 duration-500">
+      <div className="relative w-full max-w-[460px] px-4 py-6 sm:p-6 animate-in fade-in slide-in-from-bottom-8 duration-500 min-w-0">
         <div className="flex flex-col items-center mb-8">
           {/* Logo */}
           <div className="h-16 flex items-center justify-center mb-4 hover:scale-105 transition-transform duration-300">
             <img src="/gomzi-life-science.png" alt="Gomzi Life Science Logo" className="h-full w-auto object-contain" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-800">Gomzi Life Sciences LLP</h2>
-          <p className="text-sm text-slate-500">Admin Control Panel</p>
+          <h2 className="text-2xl font-bold text-slate-800 text-center">Gomzi Life Sciences LLP</h2>
+          <p className="text-sm text-slate-500 text-center">Admin Control Panel</p>
         </div>
 
-        <Card className="border border-slate-100 shadow-2xl shadow-slate-200/50 rounded-2xl">
-          <CardHeader className="space-y-1 pb-4 pt-8 text-center">
+        <Card className="border border-slate-100 shadow-2xl shadow-slate-200/50 rounded-2xl overflow-hidden">
+          <CardHeader className="space-y-1 pb-4 pt-8 text-center px-4 sm:px-6">
             <CardTitle className="text-xl font-bold text-slate-800">
               {step === 1 ? "Secure Login" : "Two-Step Verification"}
             </CardTitle>
@@ -198,7 +206,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 : `Enter the 6-digit verification code sent on WhatsApp to +91 ${mobile.replace(/(\d{5})(\d{5})/, "$1-$2")}`}
             </CardDescription>
           </CardHeader>
-          <CardContent className="px-8 pb-8">
+          <CardContent className="px-4 sm:px-8 pb-6 sm:pb-8">
             {step === 1 ? (
               <form onSubmit={handleSendOtp} className="space-y-4">
                 <div className="space-y-1.5">
@@ -212,7 +220,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       placeholder="Enter 10-digit number"
                       value={mobile}
                       onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                      className="h-12 pl-[60px] rounded-xl border-slate-200 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500 transition-all duration-200"
+                      className="h-12 pl-[60px] rounded-xl border-slate-200 text-base sm:text-sm focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500 transition-all duration-200"
                       disabled={sendingOtp}
                       required
                       autoFocus
@@ -235,11 +243,13 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   <label className="text-xs font-semibold text-slate-600 block text-center">
                     Enter Verification Code
                   </label>
-                  <div className="grid grid-cols-6 gap-2 w-full max-w-sm mx-auto">
+                  <div className="grid grid-cols-6 gap-1.5 sm:gap-2 w-full max-w-sm mx-auto">
                     {otp.map((digit, idx) => (
                       <input
                         key={idx}
                         type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         maxLength={1}
                         value={digit}
                         disabled={verifyingOtp}
@@ -247,7 +257,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                         onChange={(e) => handleOtpChange(idx, e.target.value)}
                         onKeyDown={(e) => handleKeyDown(idx, e)}
                         onPaste={idx === 0 ? handleOtpPaste : undefined}
-                        className="w-full aspect-square text-center text-lg font-bold text-slate-800 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all duration-200"
+                        className="w-full aspect-square text-center text-base sm:text-lg font-bold text-slate-800 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all duration-200 px-0"
                       />
                     ))}
                   </div>

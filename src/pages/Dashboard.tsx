@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
-  Cpu, Clock, CheckCircle2, RefreshCw, 
-  ShoppingBag, Package, Calendar, MapPin, AlertCircle,
-  FlaskConical, Palette, Layers, Factory, ShieldCheck, Truck, Check, Percent, Play,
-  ChevronLeft, ChevronRight, Eye, X, ExternalLink, Download, FileText
+  Cpu, Clock, CheckCircle2, RefreshCw, Layers,
+  Package, MapPin, AlertCircle, Activity,
+  FlaskConical, Palette, Factory, ShieldCheck, Truck, Check, Play,
+  ChevronLeft, ChevronRight, Eye, X, ExternalLink, Download, FileText, Slash, Calendar,
+  ShoppingBag
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { toast } from "sonner";
 import { BASE_API_URL } from "../config";
+
+import "./Dashboard.css";
 
 interface ProductItem {
   item_name: string;
@@ -61,6 +63,66 @@ interface DashboardProps {
   setClientName: (name: string) => void;
 }
 
+const formatDateReadable = (dateStr: any) => {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return String(dateStr);
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch {
+    return String(dateStr);
+  }
+};
+
+const getImageUrl = (url?: string | null) => {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+  const cleanPath = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
+  return `https://files.fggroup.in/${cleanPath}`;
+};
+
+const getMediaArray = (item: any, possibleKeys: string[]): string[] => {
+  if (!item) return [];
+  for (const key of possibleKeys) {
+    const val = item[key];
+    if (!val) continue;
+    if (Array.isArray(val)) {
+      return val
+        .map((v: any) => (typeof v === 'string' ? v : v?.url || v?.path || v?.fileUrl || ''))
+        .filter(Boolean);
+    }
+    if (typeof val === 'string' && val.trim()) {
+      const str = val.trim();
+      if (str.startsWith('[') && str.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(str);
+          if (Array.isArray(parsed)) {
+            return parsed
+              .map((v: any) => (typeof v === 'string' ? v : v?.url || v?.path || v?.fileUrl || ''))
+              .filter(Boolean);
+          }
+        } catch {
+          // ignore json parse error
+        }
+      }
+      if (str.includes(',')) {
+        return str.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+      return [str];
+    }
+  }
+  return [];
+};
+
+const getApiBaseUrl = () => {
+  if (import.meta.env.PROD) return "/public/v1";
+  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+  return `http://${host}:89/public/v1`;
+};
+
 export default function Dashboard({ mobileNumber, setClientName }: DashboardProps) {
   const [clients, setClients] = useState<ClientData[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
@@ -83,25 +145,260 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
   const [labelApproverName, setLabelApproverName] = useState<string>("");
   const [labelRejectionReason, setLabelRejectionReason] = useState<string>("");
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
+  const [activeImageUrl, setActiveImageUrl] = useState<string | null>(null);
+  const [showInvoiceModal, setShowInvoiceModal] = useState<boolean>(false);
+  const [activeFormulationTab, setActiveFormulationTab] = useState<number>(0);
+  const [activeProductionTab, setActiveProductionTab] = useState<number>(0);
+  const [activeLabReportTab, setActiveLabReportTab] = useState<number>(0);
+
+  useEffect(() => {
+    const isAnyModalOpen = Boolean(selectedDetailStep || showInvoiceModal || activeVideoUrl || activeImageUrl);
+    if (isAnyModalOpen) {
+      document.body.style.overflow = "hidden";
+      document.body.style.touchAction = "none";
+    } else {
+      document.body.style.overflow = "";
+      document.body.style.touchAction = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+      document.body.style.touchAction = "";
+    };
+  }, [selectedDetailStep, showInvoiceModal, activeVideoUrl, activeImageUrl]);
+
+  const handleDownloadInvoice = () => {
+    if (!selectedClient?._id) return;
+    try {
+      const baseApiUrl = getApiBaseUrl();
+
+      const downloadUrl = `${baseApiUrl}/gn-clients/download-invoice?clientId=${selectedClient._id}`;
+      const filename = `Invoice-${selectedClient.invoice_number || selectedClient.common_id.slice(-6)}.pdf`;
+      
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', filename);
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.error("Error downloading invoice:", error);
+    }
+  };
+
+  const handleViewInvoice = () => {
+    if (!selectedClient?._id) return;
+    try {
+      const baseApiUrl = getApiBaseUrl();
+
+      const viewUrl = `${baseApiUrl}/gn-clients/download-invoice?clientId=${selectedClient._id}&view=true`;
+      window.open(viewUrl, '_blank');
+    } catch (error) {
+      console.error("Error viewing invoice:", error);
+    }
+  };
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isProgrammaticScrollRef = useRef<boolean>(false);
+  const programmaticScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const formulationTabScrollRef = useRef<HTMLDivElement>(null);
+  const productionTabScrollRef = useRef<HTMLDivElement>(null);
+  const labReportTabScrollRef = useRef<HTMLDivElement>(null);
 
-  const scroll = (direction: "left" | "right") => {
+  const selectOrder = (idx: number) => {
+    setSelectedIdx(idx);
     if (scrollContainerRef.current) {
-      const scrollAmount = 280;
       const container = scrollContainerRef.current;
-      container.scrollTo({
-        left: direction === "left" 
-          ? container.scrollLeft - scrollAmount 
-          : container.scrollLeft + scrollAmount,
-        behavior: "smooth"
-      });
+      const maxScroll = container.scrollWidth - container.clientWidth;
+      if (maxScroll > 5) {
+        isProgrammaticScrollRef.current = true;
+        const firstCard = container.firstElementChild as HTMLElement;
+        const cardWidth = firstCard?.clientWidth || container.clientWidth;
+        const gap = 16;
+        container.scrollTo({
+          left: idx * (cardWidth + gap),
+          behavior: "smooth"
+        });
+        if (programmaticScrollTimeoutRef.current) {
+          clearTimeout(programmaticScrollTimeoutRef.current);
+        }
+        programmaticScrollTimeoutRef.current = setTimeout(() => {
+          isProgrammaticScrollRef.current = false;
+        }, 500);
+      }
+    }
+  };
+
+  const handleScrollOrders = () => {
+    if (!scrollContainerRef.current || clients.length === 0) return;
+    if (isProgrammaticScrollRef.current) return;
+
+    const container = scrollContainerRef.current;
+    const maxScroll = container.scrollWidth - container.clientWidth;
+    if (maxScroll <= 5) return;
+
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    scrollTimeoutRef.current = setTimeout(() => {
+      if (isProgrammaticScrollRef.current) return;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+
+      const scrollLeft = container.scrollLeft;
+      const firstCard = container.firstElementChild as HTMLElement;
+      const cardWidth = firstCard?.clientWidth || 300;
+      const gap = 16;
+      const totalStep = cardWidth + gap;
+
+      // Loop wrap-around ONLY when user manually swipes past the end/start
+      if (maxScroll > 0 && scrollLeft >= maxScroll + 25) {
+        container.scrollTo({ left: 0, behavior: "smooth" });
+        setSelectedIdx(0);
+        return;
+      }
+      if (maxScroll > 0 && scrollLeft <= -25) {
+        container.scrollTo({ left: maxScroll, behavior: "smooth" });
+        setSelectedIdx(clients.length - 1);
+        return;
+      }
+
+      const calcIdx = Math.min(
+        clients.length - 1,
+        Math.max(0, Math.round(scrollLeft / totalStep))
+      );
+
+      if (calcIdx !== selectedIdx) {
+        setSelectedIdx(calcIdx);
+      }
+    }, 40);
+  };
+
+  const isProgrammaticTabScrollRef = useRef<boolean>(false);
+  const programmaticTabScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTabScroll = (
+    container: HTMLDivElement | null,
+    totalItems: number,
+    setActiveTab: (idx: number) => void
+  ) => {
+    if (!container || totalItems <= 0 || isProgrammaticTabScrollRef.current) return;
+
+    if (tabScrollTimeoutRef.current) {
+      clearTimeout(tabScrollTimeoutRef.current);
+    }
+
+    tabScrollTimeoutRef.current = setTimeout(() => {
+      if (!container || isProgrammaticTabScrollRef.current) return;
+      const scrollLeft = container.scrollLeft;
+      const firstChild = container.firstElementChild as HTMLElement;
+      if (!firstChild) return;
+      const itemWidth = firstChild.clientWidth || 120;
+      const gap = 8;
+      const totalStep = itemWidth + gap;
+
+      const calcIdx = Math.min(
+        totalItems - 1,
+        Math.max(0, Math.round(scrollLeft / totalStep))
+      );
+
+      setActiveTab(calcIdx);
+    }, 50);
+  };
+
+  const selectFormulationTab = (idx: number, totalItems: number) => {
+    if (totalItems <= 0) return;
+    const nextIdx = (idx + totalItems) % totalItems;
+
+    isProgrammaticTabScrollRef.current = true;
+    setActiveFormulationTab(nextIdx);
+
+    if (programmaticTabScrollTimeoutRef.current) {
+      clearTimeout(programmaticTabScrollTimeoutRef.current);
+    }
+    programmaticTabScrollTimeoutRef.current = setTimeout(() => {
+      isProgrammaticTabScrollRef.current = false;
+    }, 600);
+
+    if (formulationTabScrollRef.current) {
+      const container = formulationTabScrollRef.current;
+      const tabElement = container.children[nextIdx] as HTMLElement;
+      if (tabElement) {
+        const containerWidth = container.clientWidth;
+        const tabOffset = tabElement.offsetLeft;
+        const tabWidth = tabElement.clientWidth;
+        container.scrollTo({
+          left: tabOffset - containerWidth / 2 + tabWidth / 2,
+          behavior: "smooth"
+        });
+      }
+    }
+  };
+
+  const selectProductionTab = (idx: number, totalItems: number) => {
+    if (totalItems <= 0) return;
+    const nextIdx = (idx + totalItems) % totalItems;
+
+    isProgrammaticTabScrollRef.current = true;
+    setActiveProductionTab(nextIdx);
+
+    if (programmaticTabScrollTimeoutRef.current) {
+      clearTimeout(programmaticTabScrollTimeoutRef.current);
+    }
+    programmaticTabScrollTimeoutRef.current = setTimeout(() => {
+      isProgrammaticTabScrollRef.current = false;
+    }, 600);
+
+    if (productionTabScrollRef.current) {
+      const container = productionTabScrollRef.current;
+      const tabElement = container.children[nextIdx] as HTMLElement;
+      if (tabElement) {
+        const containerWidth = container.clientWidth;
+        const tabOffset = tabElement.offsetLeft;
+        const tabWidth = tabElement.clientWidth;
+        container.scrollTo({
+          left: tabOffset - containerWidth / 2 + tabWidth / 2,
+          behavior: "smooth"
+        });
+      }
+    }
+  };
+
+  const selectLabReportTab = (idx: number, totalItems: number) => {
+    if (totalItems <= 0) return;
+    const nextIdx = (idx + totalItems) % totalItems;
+
+    isProgrammaticTabScrollRef.current = true;
+    setActiveLabReportTab(nextIdx);
+
+    if (programmaticTabScrollTimeoutRef.current) {
+      clearTimeout(programmaticTabScrollTimeoutRef.current);
+    }
+    programmaticTabScrollTimeoutRef.current = setTimeout(() => {
+      isProgrammaticTabScrollRef.current = false;
+    }, 600);
+
+    if (labReportTabScrollRef.current) {
+      const container = labReportTabScrollRef.current;
+      const tabElement = container.children[nextIdx] as HTMLElement;
+      if (tabElement) {
+        const containerWidth = container.clientWidth;
+        const tabOffset = tabElement.offsetLeft;
+        const tabWidth = tabElement.clientWidth;
+        container.scrollTo({
+          left: tabOffset - containerWidth / 2 + tabWidth / 2,
+          behavior: "smooth"
+        });
+      }
     }
   };
 
   const handleDownloadFile = (url: string, filename: string) => {
     try {
-      const baseApiUrl = BASE_API_URL;
+      const baseApiUrl = getApiBaseUrl();
 
       const downloadProxyUrl = `${baseApiUrl}/download-file?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`;
       window.location.href = downloadProxyUrl;
@@ -119,7 +416,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
     setError(null);
 
     try {
-      const baseApiUrl = BASE_API_URL;
+      const baseApiUrl = getApiBaseUrl();
 
       const res = await fetch(`${baseApiUrl}/gn-clients/production-process?mobile=${mobileNumber}`);
       if (!res.ok) {
@@ -154,7 +451,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
   const fetchClientDetails = async (clientId: string) => {
     setDetailsLoading(true);
     try {
-      const baseApiUrl = BASE_API_URL;
+      const baseApiUrl = getApiBaseUrl();
 
       const res = await fetch(`${baseApiUrl}/gn-clients/production-process/details?clientId=${clientId}`);
       if (!res.ok) {
@@ -182,6 +479,12 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
     }
   }, [selectedIdx, clients]);
 
+  useEffect(() => {
+    setActiveFormulationTab(0);
+    setActiveProductionTab(0);
+    setActiveLabReportTab(0);
+  }, [selectedDetailStep]);
+
   const handleClientLabelAction = async (designId: string, action: 'approve' | 'reject') => {
     if (action === 'approve' && !approverName.trim()) {
       toast.error("Please enter your name to confirm approval.");
@@ -194,7 +497,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
 
     setSubmittingAction(true);
     try {
-      const baseApiUrl = BASE_API_URL;
+      const baseApiUrl = getApiBaseUrl();
 
       const res = await fetch(`${baseApiUrl}/gn-clients/label-design/approve-reject`, {
         method: 'POST',
@@ -219,7 +522,6 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
         setApproverName("");
         setRejectionReason("");
         
-        // Refresh details & parent states
         const activeClient = clients[selectedIdx];
         if (activeClient?._id) {
           fetchClientDetails(activeClient._id);
@@ -247,7 +549,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
 
     setSubmittingAction(true);
     try {
-      const baseApiUrl = BASE_API_URL;
+      const baseApiUrl = getApiBaseUrl();
 
       const res = await fetch(`${baseApiUrl}/gn-clients/client-label/approve-reject`, {
         method: 'POST',
@@ -272,7 +574,6 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
         setLabelApproverName("");
         setLabelRejectionReason("");
         
-        // Refresh details & parent states
         const activeClient = clients[selectedIdx];
         if (activeClient?._id) {
           fetchClientDetails(activeClient._id);
@@ -294,25 +595,25 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
     if (!process) return { text: "Pending", color: "bg-slate-100 text-slate-700 border-slate-200/50", stepIndex: 0 };
 
     if (process.dispatch?.status === "done") {
-      return { text: "Dispatched", color: "bg-emerald-50 text-emerald-700 border-emerald-200/60 shadow-[0_2px_8px_rgba(16,185,129,0.04)]", stepIndex: 7 };
+      return { text: "Dispatched", color: "bg-emerald-50 text-emerald-700 border-emerald-200/60", stepIndex: 7 };
     }
     if (process.qc?.status === "done") {
-      return { text: "Packaging / Ready", color: "bg-blue-50 text-blue-700 border-blue-200/60 shadow-[0_2px_8px_rgba(59,130,246,0.04)]", stepIndex: 6 };
+      return { text: "Packaging / Ready", color: "bg-blue-50 text-blue-700 border-blue-200/60", stepIndex: 6 };
     }
     if (process.lab_report?.status === "done" || process.lab_report?.status === "skipped") {
-      return { text: "Quality Check Stage", color: "bg-purple-50 text-purple-700 border-purple-200/60 shadow-[0_2px_8px_rgba(168,85,247,0.04)]", stepIndex: 5 };
+      return { text: "Quality Check Stage", color: "bg-purple-50 text-purple-700 border-purple-200/60", stepIndex: 5 };
     }
     if (process.production?.status === "done") {
-      return { text: "Laboratory Testing", color: "bg-amber-50 text-amber-700 border-amber-200/60 shadow-[0_2px_8px_rgba(245,158,11,0.04)]", stepIndex: 4 };
+      return { text: "Laboratory Testing", color: "bg-amber-50 text-amber-700 border-amber-200/60", stepIndex: 4 };
     }
     if (process.procurement?.status === "done") {
-      return { text: "Active Production", color: "bg-indigo-50 text-indigo-700 border-indigo-200/60 shadow-[0_2px_8px_rgba(99,102,241,0.04)]", stepIndex: 3 };
+      return { text: "Active Production", color: "bg-indigo-50 text-indigo-700 border-indigo-200/60", stepIndex: 3 };
     }
     if (process.label_sticker?.status === "done" || process.label_sticker?.status === "skipped") {
-      return { text: "Material Sourcing", color: "bg-cyan-50 text-cyan-700 border-cyan-200/60 shadow-[0_2px_8px_rgba(6,182,212,0.04)]", stepIndex: 2 };
+      return { text: "Material Sourcing", color: "bg-cyan-50 text-cyan-700 border-cyan-200/60", stepIndex: 2 };
     }
     if (process.formulation?.status === "done") {
-      return { text: "Label & Artboard Design", color: "bg-orange-50 text-orange-700 border-orange-200/60 shadow-[0_2px_8px_rgba(249,115,22,0.04)]", stepIndex: 1 };
+      return { text: "Label & Artboard Design", color: "bg-orange-50 text-orange-700 border-orange-200/60", stepIndex: 1 };
     }
 
     return { text: "Formulating Supplement", color: "bg-slate-50 text-slate-600 border-slate-200/60", stepIndex: 0 };
@@ -324,63 +625,108 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
       day: "numeric",
       month: "short",
       year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     });
+  };
+
+  const getValidProductName = (item: any, idx?: number, defaultFallback?: string) => {
+    let candidate = '';
+    const invalidNames = ['N/A', 'PRODUCT ITEM', 'UNKNOWN PRODUCT', 'PRODUCT', 'ITEM'];
+
+    if (typeof item === 'string') {
+      candidate = item;
+    } else if (item && typeof item === 'object') {
+      const prodItemId = typeof item.production_itemId === 'object' && item.production_itemId !== null
+        ? item.production_itemId._id || item.production_itemId.id
+        : item.production_itemId || item.item_id || item.itemId || item.product_id;
+
+      if (prodItemId && selectedClient?.items) {
+        const matched = selectedClient.items.find((i: any) => String(i._id) === String(prodItemId) || String(i.item_name) === String(prodItemId));
+        if (matched?.item_name && matched.item_name.trim() !== '' && !invalidNames.includes(matched.item_name.trim().toUpperCase())) {
+          return matched.item_name.trim();
+        }
+      }
+
+      candidate = typeof item.production_itemId === 'object' && item.production_itemId?.item_name
+        ? item.production_itemId.item_name
+        : item.productName || item.product_name || item.item_name || item.production_name || item.title || '';
+    }
+
+    if (candidate && typeof candidate === 'string' && candidate.trim() !== '' && !invalidNames.includes(candidate.trim().toUpperCase())) {
+      return candidate.trim();
+    }
+
+    if (idx !== undefined && selectedClient?.items?.[idx]?.item_name && !invalidNames.includes(selectedClient.items[idx].item_name.trim().toUpperCase())) {
+      return selectedClient.items[idx].item_name.trim();
+    }
+
+    if (selectedClient?.items?.length === 1 && selectedClient.items[0]?.item_name && !invalidNames.includes(selectedClient.items[0].item_name.trim().toUpperCase())) {
+      return selectedClient.items[0].item_name.trim();
+    }
+
+    if (selectedClient?.items?.[0]?.item_name && !invalidNames.includes(selectedClient.items[0].item_name.trim().toUpperCase())) {
+      return selectedClient.items[0].item_name.trim();
+    }
+
+    if (defaultFallback && !invalidNames.includes(defaultFallback.trim().toUpperCase())) {
+      return defaultFallback.trim();
+    }
+
+    return 'Product Details';
   };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 relative">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-primary-500/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative flex items-center justify-center">
-          <div className="w-16 h-16 rounded-full border-[3px] border-primary-100 border-t-primary-500 animate-spin" />
-          <Cpu className="w-6 h-6 text-primary-500 absolute animate-pulse" />
+      <main className="sales-portal-main">
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+          <div className="w-12 h-12 rounded-full border-4 border-[#f2f9eb] border-t-[#99c229] animate-spin" />
+          <p className="text-[#7e8299] text-sm font-medium tracking-wide">Loading live tracking details...</p>
         </div>
-        <p className="text-slate-500 text-sm font-medium tracking-wide animate-pulse">Loading live tracking details...</p>
-      </div>
+      </main>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center max-w-md mx-auto gap-4 p-6 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-100 shadow-xl shadow-slate-100/50">
-        <div className="w-12 h-12 rounded-full bg-red-50 text-red-500 flex items-center justify-center border border-red-100 shadow-sm shadow-red-500/10">
-          <AlertCircle className="w-6 h-6 animate-bounce" />
+      <main className="sales-portal-main">
+        <div className="flex flex-col items-center justify-center min-h-[50vh] text-center max-w-md mx-auto gap-4 p-6 bg-white rounded-2xl border border-[#ebebeb] shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-red-50 text-red-500 flex items-center justify-center">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-semibold text-[#404040]">Sync Connection Error</h2>
+          <p className="text-xs text-[#7e8299]">{error}</p>
+          <Button onClick={() => fetchClientData()} className="btn-target-brand mt-2">
+            <RefreshCw className="w-4 h-4" /> Try Again
+          </Button>
         </div>
-        <h2 className="text-md font-semibold text-slate-800 tracking-tight">Sync Connection Error</h2>
-        <p className="text-xs text-slate-500 leading-relaxed">{error}</p>
-        <Button onClick={() => fetchClientData()} className="flex items-center gap-2 mt-2 bg-slate-900 hover:bg-slate-800 text-white font-medium shadow-md shadow-slate-950/10 h-10 px-4 rounded-xl">
-          <RefreshCw className="w-4 h-4" /> Try Again
-        </Button>
-      </div>
+      </main>
     );
   }
 
   if (clients.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center max-w-md mx-auto gap-4 p-8 bg-white/80 backdrop-blur-md rounded-2xl border border-slate-100 shadow-xl shadow-slate-100/50">
-        <div className="w-14 h-14 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center border border-slate-150">
-          <ShoppingBag className="w-6 h-6" />
+      <main className="sales-portal-main">
+        <div className="flex flex-col items-center justify-center min-h-[50vh] text-center max-w-md mx-auto gap-4 p-8 bg-white rounded-2xl border border-[#ebebeb] shadow-sm">
+          <div className="w-14 h-14 rounded-full bg-[#f5f5f5] text-[#7e8299] flex items-center justify-center">
+            <ShoppingBag className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-semibold text-[#404040]">No Active Orders Found</h2>
+          <p className="text-xs text-[#7e8299]">
+            We couldn't find any registered invoices linked to mobile number:
+            <strong className="text-[#404040] block mt-1.5 font-mono text-sm">
+              +91 {mobileNumber}
+            </strong>
+          </p>
+          <Button onClick={() => fetchClientData(true)} variant="outline" className="mt-2">
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} /> Check Again
+          </Button>
         </div>
-        <h2 className="text-md font-semibold text-slate-800 tracking-tight">No Active Orders Found</h2>
-        <p className="text-xs text-slate-500 leading-relaxed">
-          We couldn't find any registered invoices or clients linked to the mobile number:
-          <strong className="text-slate-700 block mt-1.5 bg-slate-50 border border-slate-100 rounded-lg py-1 px-3 inline-block font-mono text-sm">
-            +91 {mobileNumber}
-          </strong>
-        </p>
-        <Button onClick={() => fetchClientData(true)} variant="outline" className="flex items-center gap-2 mt-2 border-slate-200">
-          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} /> Check Again
-        </Button>
-      </div>
+      </main>
     );
   }
 
   const selectedClient = clients[selectedIdx];
   const overallStatus = getOverallStatus(selectedClient);
 
-  // Steps definitions (concise and highly professional)
   const steps = [
     {
       title: "1. Formulation Phase",
@@ -389,16 +735,6 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
       icon: FlaskConical,
       data: selectedClient.production_process?.formulation,
     },
-    /*
-    {
-      title: "2. Label & Artwork Design",
-      description: "Graphic adjustments, label layout approval, and printing container stickers.",
-      stepKey: "label_sticker",
-      icon: Palette,
-      data: selectedClient.production_process?.label_sticker,
-      metaInfo: selectedClient.production_process?.label_sticker?.is_outsourced ? "Outsourced Sticker Printing" : "",
-    },
-    */
     {
       title: "2. Client Label",
       description: "Client custom labels and verification documents.",
@@ -444,389 +780,686 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
     },
   ];
 
-  const completedCount = steps.filter(s => s.data?.status === "done" || s.data?.status === "skipped").length;
-  const progressPercent = Math.round((completedCount / steps.length) * 100);
+  const completedCount = steps.filter(s => s.data?.status === "done").length;
+  const skippedCount = steps.filter(s => s.data?.status === "skipped").length;
+  const totalCompletedSteps = completedCount + skippedCount;
+  const currentStageNum = totalCompletedSteps === 7 ? 7 : Math.min(7, totalCompletedSteps + 1);
+  const remainingCount = steps.length - totalCompletedSteps;
+  const progressPercent = Math.round((totalCompletedSteps / steps.length) * 100);
 
-  const totalOrders = clients.length;
-  const completedOrdersCount = clients.filter(c => c.production_process?.dispatch?.status === "done").length;
-  const activeOrdersCount = totalOrders - completedOrdersCount;
+  // Circular progress SVG constants
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (progressPercent / 100) * circumference;
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300 w-full relative">
-      
-      {/* Ambient background glows */}
-      <div className="absolute top-[-40px] left-[-40px] w-72 h-72 bg-emerald-500/[0.02] rounded-full blur-[100px] pointer-events-none" />
-      <div className="absolute bottom-10 right-10 w-96 h-96 bg-primary-500/[0.02] rounded-full blur-[130px] pointer-events-none" />
+    <main className="sales-portal-main bg-[#f8faf6]">
+      <div className="space-y-4 sm:space-y-6">
 
-      {/* Light Neon Accented Header Banner */}
-      <div className="relative overflow-hidden bg-white/90 backdrop-blur-md p-5 md:p-6 rounded-2xl shadow-[0_4px_25px_rgba(0,0,0,0.02)] border border-slate-100 border-l-4 border-l-emerald-500">
-        <div className="absolute top-[-50px] right-[-50px] w-[150px] h-[150px] bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
-        
-        <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div className="space-y-1.5">
-            <h1 className="text-lg md:text-xl font-semibold text-slate-800 tracking-tight">Production Status Panel</h1>
-            <p className="text-xs text-slate-600 font-medium leading-relaxed max-w-xl">
-              Real-time monitoring of supplement production workflows for customer account linked to <strong className="text-slate-800 font-semibold whitespace-nowrap">+91 {mobileNumber}</strong>
-            </p>
-          </div>
+        {/* Desktop View: Top Stat Banner */}
+        <div className="hidden md:grid bg-white rounded-2xl border-y-2 border-x border-[#c4e092] border-x-slate-200/80 shadow-xs py-8 px-6 md:px-8 grid-cols-3 divide-x divide-slate-200 min-h-[140px] items-center">
           
-          <div className="shrink-0 flex items-center gap-2">
-            <Button 
-              size="sm" 
-              variant="outline" 
-              onClick={() => fetchClientData(true)} 
-              disabled={refreshing}
-              className="text-xs font-semibold flex items-center gap-1.5 h-9 px-3 rounded-xl border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm hover:bg-slate-50 transition-all"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${refreshing ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
+          {/* Metric 1: TOTAL ITEMS */}
+          <div className="flex items-center gap-5 md:pr-8">
+            <div className="w-14 h-14 rounded-2xl bg-[#f0f7e6] text-[#83ab1f] flex items-center justify-center border-2 border-[#d2e8aa] shrink-0 shadow-xs">
+              <FileText className="w-7 h-7 stroke-[2]" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+                TOTAL ITEMS
+              </div>
+              <div className="text-3xl sm:text-4xl font-bold text-slate-800 leading-tight my-0.5">
+                {selectedClient?.items?.length || 0}
+              </div>
+              <div className="text-xs font-semibold text-[#83ab1f] mt-1 truncate">
+                Invoice #{selectedClient?.invoice_number || selectedClient?.common_id?.slice(-6)}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Horizontal Scrollable Tabs Selector for Invoices (Top Panel) */}
-      <div className="space-y-2 relative">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 px-1">Your Invoice Orders</p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => scroll("left")}
-            className="h-8 w-8 rounded-full border border-slate-100 bg-white text-slate-500 hover:bg-slate-50 shrink-0 shadow-sm hover:scale-105 active:scale-95 transition-all"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
+          {/* Metric 2: CURRENT STAGE */}
+          <div className="flex items-center gap-5 md:px-8">
+            <div className="w-14 h-14 rounded-2xl bg-[#fff8e6] text-[#e05638] flex items-center justify-center border-2 border-[#fde68a] shrink-0 shadow-xs">
+              <Clock className="w-7 h-7 stroke-[2]" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+                CURRENT STAGE
+              </div>
+              <div className="text-3xl sm:text-4xl font-bold text-slate-800 leading-tight my-0.5">
+                {currentStageNum}
+              </div>
+              <div className="text-xs font-semibold text-[#e05638] mt-1 truncate">
+                {overallStatus.text}
+              </div>
+            </div>
+          </div>
+
+          {/* Metric 3: COMPLETED STAGES */}
+          <div className="flex items-center gap-5 md:pl-8">
+            <div className="w-14 h-14 rounded-2xl bg-[#e8f9ee] text-[#20b657] flex items-center justify-center border-2 border-[#bbf0cb] shrink-0 shadow-xs">
+              <CheckCircle2 className="w-7 h-7 stroke-[2]" />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold tracking-wider text-slate-500 uppercase">
+                COMPLETED STAGES
+              </div>
+              <div className="text-3xl sm:text-4xl font-bold text-slate-800 leading-tight my-0.5">
+                {totalCompletedSteps}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[#20b657] mt-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{progressPercent}% Completed</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* YOUR ACTIVE INVOICE ORDERS Pills Selector */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] font-bold tracking-wider text-slate-600 uppercase">
+              YOUR ACTIVE INVOICE ORDERS
+            </div>
+          </div>
 
           <div 
             ref={scrollContainerRef}
-            className="flex-1 flex gap-2.5 overflow-x-auto py-1.5 select-none scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+            onScroll={handleScrollOrders}
+            className="flex items-center gap-4 overflow-x-auto py-1 px-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth w-full snap-x snap-mandatory"
           >
             {clients.map((client, idx) => {
               const isSelected = idx === selectedIdx;
               const overall = getOverallStatus(client);
               return (
-                <button
-                  key={client._id}
-                  onClick={() => setSelectedIdx(idx)}
-                  className={`shrink-0 px-4 py-2.5 rounded-xl border text-xs transition-all duration-300 flex items-center gap-2.5 hover:translate-y-[-1px] ${
-                    isSelected
-                      ? "bg-emerald-50/80 text-emerald-700 border-emerald-400 shadow-[0_4px_12px_rgba(16,185,129,0.08)] ring-1 ring-emerald-400/20 font-semibold"
-                      : "bg-white text-slate-600 border-slate-100 hover:border-slate-200 hover:bg-slate-50/50 font-medium shadow-sm"
-                  }`}
-                >
-                  <div className="flex flex-col items-start gap-0.5">
-                    {client.items && client.items.length > 0 && (
-                      <span className={`font-bold text-xs tracking-tight text-left ${isSelected ? "text-emerald-800" : "text-slate-800"}`}>
-                        {client.items.map(i => i.item_name).join(', ')}
-                      </span>
-                    )}
-                    <span className={`text-[10px] font-medium tracking-wide text-left transition-colors duration-300 ${isSelected ? "text-emerald-600/90" : "text-slate-450"}`}>
-                      Invoice #{client.invoice_number || `INV-${client.common_id.slice(-6)}`}
+                <React.Fragment key={client._id}>
+                  <div
+                    onClick={() => selectOrder(idx)}
+                    className={`flex items-center justify-between gap-3 px-3.5 sm:px-4 py-3 rounded-2xl cursor-pointer transition-all duration-200 shrink-0 min-w-full sm:min-w-0 w-full sm:w-[calc(50%-0.4375rem)] lg:w-[calc(33.333%-0.583rem)] snap-start [scroll-snap-stop:always] border ${
+                      isSelected 
+                        ? "bg-white border-[#789d1b] shadow-md ring-2 ring-[#789d1b]/20" 
+                        : "bg-white border-slate-200/80 hover:border-slate-300 hover:bg-slate-50/80 shadow-2xs"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-9 h-9 sm:w-9.5 sm:h-9.5 rounded-xl bg-[#f0f7e6] text-[#789d1b] flex items-center justify-center shrink-0 border border-[#d2e8aa]">
+                        <Package className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-slate-800 truncate">
+                          {client.items && client.items.length > 0
+                            ? client.items.map(i => i.item_name).join(', ')
+                            : `Invoice #${client.invoice_number || client.common_id.slice(-6)}`}
+                        </div>
+                        <div className="text-[11px] font-medium text-slate-400 mt-0.5">
+                          Invoice #{client.invoice_number || client.common_id.slice(-6)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className={`text-[10px] font-bold px-2.5 sm:px-3 py-1.5 rounded-lg uppercase tracking-wide shrink-0 ${
+                      isSelected ? "bg-[#f0f7e6] text-[#789d1b] border border-[#d2e8aa]" : "bg-slate-100 text-slate-500"
+                    }`}>
+                      {overall.text}
                     </span>
                   </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border transition-colors duration-300 shrink-0 ${
-                    isSelected 
-                      ? "bg-emerald-100/70 text-emerald-800 border-emerald-200/30 shadow-[0_1px_5px_rgba(16,185,129,0.04)]" 
-                      : "bg-slate-50 text-slate-500 border-slate-200/50"
-                  }`}>
-                    {overall.text}
-                  </span>
-                </button>
+                </React.Fragment>
               );
             })}
           </div>
 
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => scroll("right")}
-            className="h-8 w-8 rounded-full border border-slate-100 bg-white text-slate-500 hover:bg-slate-50 shrink-0 shadow-sm hover:scale-105 active:scale-95 transition-all"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
+          {/* Pagination Dots Indicator for All Devices */}
+          {clients.length > 1 && (
+            <div className="flex items-center justify-center gap-1.5 pt-1 pb-0.5">
+              {clients.map((_, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => selectOrder(idx)}
+                  className={`transition-all duration-300 rounded-full cursor-pointer border-0 ${
+                    idx === selectedIdx
+                      ? "w-6 h-2 bg-[#83ab1f] shadow-xs"
+                      : "w-2 h-2 bg-slate-300 hover:bg-slate-400"
+                  }`}
+                  title={`Go to order #${idx + 1}`}
+                  aria-label={`Go to order #${idx + 1}`}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      </div>
 
-      {/* KPI Stats Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="relative overflow-hidden bg-white/95 backdrop-blur-sm border border-slate-100/80 border-l-4 border-l-emerald-500 shadow-[0_2px_12px_rgba(0,0,0,0.015)] hover:shadow-md hover:scale-[1.01] transition-all duration-300">
-          <CardContent className="p-4 flex justify-between items-center">
-            <div className="space-y-0.5">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Invoiced</p>
-              <h3 className="text-2xl font-bold text-slate-800 tracking-tight">{totalOrders}</h3>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.05)] flex items-center justify-center">
-              <ShoppingBag className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card className="relative overflow-hidden bg-white/95 backdrop-blur-sm border border-slate-100/80 border-l-4 border-l-amber-500 shadow-[0_2px_12px_rgba(0,0,0,0.015)] hover:shadow-md hover:scale-[1.01] transition-all duration-300">
-          <CardContent className="p-4 flex justify-between items-center">
-            <div className="space-y-0.5">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Production</p>
-              <h3 className="text-2xl font-bold text-slate-800 tracking-tight">{activeOrdersCount}</h3>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 border border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.05)] flex items-center justify-center">
-              <Clock className="w-5 h-5 animate-pulse" />
-            </div>
-          </CardContent>
-        </Card>
+        {/* Main Grid: Left 8 Columns (Progress & Stepper), Right 4 Columns (Recipe, Shipping, Links, Support) */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-        <Card className="relative overflow-hidden bg-white/95 backdrop-blur-sm border border-slate-100/80 border-l-4 border-l-cyan-500 shadow-[0_2px_12px_rgba(0,0,0,0.015)] hover:shadow-md hover:scale-[1.01] transition-all duration-300">
-          <CardContent className="p-4 flex justify-between items-center">
-            <div className="space-y-0.5">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Completed batches</p>
-              <h3 className="text-2xl font-bold text-slate-800 tracking-tight">{completedOrdersCount}</h3>
-            </div>
-            <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 border border-cyan-500/20 shadow-[0_0_10px_rgba(6,182,212,0.05)] flex items-center justify-center">
-              <CheckCircle2 className="w-5 h-5" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          {/* Left Side Main Card (8 Cols) */}
+          <div className="lg:col-span-8 space-y-6">
 
-      {/* Main Grid Content: Timeline on Left, Order & Shipping details on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start w-full">
-        
-        {/* Left Side: Timeline Progress Card (2 Columns Wide on large displays) */}
-        <div className="lg:col-span-2 space-y-5 w-full">
-          <Card className="border border-slate-100/80 shadow-[0_4px_20px_rgba(0,0,0,0.02)] relative overflow-hidden bg-white/95 backdrop-blur-sm rounded-2xl">
-            <div className="absolute top-0 right-0 w-36 h-36 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none" />
-            
-            <CardHeader className="border-b border-slate-50 p-5">
-              <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
-                <div className="space-y-0.5">
-                  <div className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Live Production Status</div>
-                  <CardTitle className="text-base font-semibold text-slate-800">
-                    Production Timeline for Invoice #{selectedClient.invoice_number || `INV-${selectedClient.common_id.slice(-6)}`}
-                  </CardTitle>
-                </div>
-                <div className="shrink-0">
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border uppercase tracking-wider shadow-sm ${overallStatus.color}`}>
-                    {overallStatus.text}
-                  </span>
-                </div>
-              </div>
-
-              {/* Progress Bar Container */}
-              <div className="mt-5 pt-3 border-t border-slate-50 space-y-2">
-                <div className="flex justify-between items-center text-xs text-slate-500">
-                  <span className="font-semibold text-slate-650 flex items-center gap-1.5">
-                    <Percent className="w-3.5 h-3.5 text-emerald-500" />
-                    Overall Process Progress
-                  </span>
-                  <span className="font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100/50 rounded-md px-2 py-0.5 text-xs shadow-sm shadow-emerald-500/[0.02]">{progressPercent}% Completed</span>
-                </div>
-                <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-200/50">
-                  <div 
-                    className="bg-gradient-to-r from-emerald-500 to-emerald-600 h-full rounded-full transition-all duration-500 ease-out shadow-[0_1px_5px_rgba(16,185,129,0.2)]" 
-                    style={{ width: `${progressPercent}%` }} 
-                  />
-                </div>
-              </div>
-            </CardHeader>
-            
-            <CardContent className="p-6 md:p-8">
+            {/* PRODUCTION PROGRESS Card */}
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden">
               
-              {/* Stepper Timeline Graphics */}
-              <div className="relative border-l-2 border-slate-100 ml-5 pl-7 space-y-8 py-1">
-                {steps.map((step, idx) => {
-                  const stepData = step.data;
-                  const StepIcon = step.icon;
-                  const isDone = stepData?.status === "done";
-                  const isSkipped = stepData?.status === "skipped";
-                  const isPending = !stepData || stepData?.status === "pending";
-                  
-                  // Check if this step is currently in progress
-                  const isPreviousStepsDone = steps.slice(0, idx).every(s => s.data?.status === "done" || s.data?.status === "skipped");
-                  const isActive = isPending && isPreviousStepsDone;
+              {/* Header */}
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-[#f0f7e6] text-[#789d1b] flex items-center justify-center border border-[#d2e8aa] shrink-0">
+                    <Activity className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                      PRODUCTION PROGRESS
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5">
+                      Invoice #{selectedClient.invoice_number || selectedClient.common_id.slice(-6)} · {selectedClient.items?.map(i => i.item_name).join(', ')}
+                    </p>
+                  </div>
+                </div>
 
-                  return (
-                    <div key={idx} className="relative group transition-all duration-300">
-                      
-                      {/* Timeline circle dot on line */}
-                      <span className={`absolute top-0.5 left-[-41px] w-7 h-7 rounded-full border-2 flex items-center justify-center z-10 transition-all duration-300 ${
-                        isDone 
-                          ? "bg-emerald-500 border-emerald-500 text-white shadow-[0_2px_8px_rgba(16,185,129,0.3)] scale-105"
-                          : isSkipped
-                          ? "bg-slate-200 border-slate-200 text-slate-500 shadow-sm"
-                          : isActive
-                          ? "bg-white border-emerald-500 text-emerald-600 shadow-[0_2px_10px_rgba(16,185,129,0.2)] ring-4 ring-emerald-500/15 scale-105"
-                          : "bg-white border-slate-100 text-slate-400"
-                      }`}>
-                        {isDone ? (
-                          <Check className="w-3.5 h-3.5 stroke-[3.5]" />
-                        ) : isSkipped ? (
-                          <span className="text-[10px] font-bold">X</span>
-                        ) : (
-                          <StepIcon className="w-3.5 h-3.5" />
-                        )}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1 sm:pt-0 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setShowInvoiceModal(true)}
+                    className="w-full sm:w-auto px-3.5 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-slate-500" />
+                    View Invoice
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadInvoice}
+                    className="w-full sm:w-auto px-3.5 py-2 text-xs font-bold text-white bg-[#83ab1f] border border-[#83ab1f] rounded-xl hover:bg-[#74991b] transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download Invoice
+                  </button>
+                </div>
+              </div>
+
+              {/* Workflow Details Strip */}
+              <div className="px-4 py-3 sm:px-6 sm:py-4 bg-slate-50/60 border-b border-slate-100 grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-xs items-center">
+                <div className="hidden sm:block min-w-0">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">WORKFLOW NAME</div>
+                  <div className="text-xs font-bold text-slate-800 mt-0.5 truncate" title="Supplement Manufacturing">
+                    Supplement Manufacturing
+                  </div>
+                </div>
+                <div className="min-w-0 sm:text-center">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">CREATED ON</div>
+                  <div className="text-xs font-bold text-slate-800 mt-0.5 truncate">{formatDate(selectedClient.createdAt)}</div>
+                </div>
+                <div className="min-w-0 flex flex-col items-start sm:items-end text-left sm:text-right">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate w-full">CURRENT STATUS</div>
+                  <div className="mt-0.5">
+                    <span className="inline-block px-2.5 py-0.5 text-[9px] sm:text-[10px] font-bold rounded-md uppercase bg-[#f0f7e6] text-[#789d1b] border border-[#d2e8aa] truncate max-w-full">
+                      {overallStatus.text}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Ring & Timeline Grid */}
+              <div className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+                
+                {/* Left: Circular Progress Ring */}
+                <div className="md:col-span-4 lg:col-span-3 flex flex-col items-center justify-center p-3 border-b md:border-b-0 md:border-r border-slate-100">
+                  <div className="text-xs font-extrabold text-slate-800 uppercase tracking-wider mb-3">
+                    PROGRESS OVERVIEW
+                  </div>
+                  <div className="relative w-28 h-28 sm:w-32 sm:h-32 flex items-center justify-center">
+                    <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
+                      <circle
+                        stroke="#f1f5f9"
+                        fill="transparent"
+                        strokeWidth="8"
+                        r="42"
+                        cx="50"
+                        cy="50"
+                      />
+                      <circle
+                        stroke="#83ab1f"
+                        fill="transparent"
+                        strokeWidth="8"
+                        strokeDasharray={`${circumference} ${circumference}`}
+                        style={{ strokeDashoffset }}
+                        strokeLinecap="round"
+                        r={radius}
+                        cx="50"
+                        cy="50"
+                        className="transition-all duration-700 ease-out"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                      <span className="text-xl font-black text-slate-900">{progressPercent}%</span>
+                      <span className="text-[9px] font-extrabold text-[#789d1b] uppercase tracking-wider">ACHIEVED</span>
+                    </div>
+                  </div>
+
+                  {/* Legend list */}
+                  <div className="w-full mt-3 space-y-1 text-[11px] font-semibold text-slate-600">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-slate-300" />
+                        Total Steps
                       </span>
+                      <span className="font-bold text-slate-900">7 Steps</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-[#83ab1f]" />
+                        Completed
+                      </span>
+                      <span className="font-bold text-[#83ab1f]">{completedCount} Steps</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        Skipped
+                      </span>
+                      <span className="font-bold text-amber-600">{skippedCount} Step</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-slate-200" />
+                        Remaining
+                      </span>
+                      <span className="font-bold text-slate-400">{remainingCount} Steps</span>
+                    </div>
+                  </div>
+                </div>
 
-                      {/* Connectors highlight with subtle neon glow */}
-                      {isDone && idx < steps.length - 1 && (
-                        <div className="absolute top-7 left-[-32px] w-[2px] h-[34px] bg-emerald-500/90 shadow-[0_0_8px_rgba(16,185,129,0.2)] z-0" />
-                      )}
+                {/* Right: Node Stepper Timeline showing all steps */}
+                <div className="md:col-span-8 lg:col-span-9 space-y-4 min-w-0 pt-2 md:pt-0">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                      PRODUCTION TIMELINE
+                    </h4>
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      Track your production journey
+                    </p>
+                  </div>
 
-                      {/* Content step card with left border lighting */}
-                      <div 
-                        onClick={() => step.stepKey !== 'procurement' && setSelectedDetailStep(step.stepKey)}
-                        className={`p-4 rounded-xl border transition-all duration-305 hover:shadow-sm ${
-                          step.stepKey !== 'procurement' 
-                            ? "cursor-pointer hover:bg-slate-50/70 active:scale-[0.99]" 
-                            : ""
-                        } ${
-                          isDone 
-                            ? "bg-emerald-500/[0.01] border-slate-150 border-l-4 border-l-emerald-500 shadow-[0_1px_5px_rgba(0,0,0,0.005)]" 
-                            : isActive 
-                            ? "bg-emerald-50/[0.03] border-emerald-250 border-l-4 border-l-emerald-400 shadow-[0_2px_12px_rgba(16,185,129,0.03)]" 
-                            : "bg-transparent border-transparent border-l-4 border-l-slate-200 opacity-60"
-                        }`}
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                          <h4 className={`text-xs md:text-sm font-semibold ${
+                  {/* Mobile View: Connected Vertical Timeline Stepper */}
+                  <div className="block sm:hidden relative pl-1.5 pr-0.5 py-1 space-y-3">
+                    {steps.map((step, idx) => {
+                      const stepData = step.data;
+                      const isDone = stepData?.status === "done";
+                      const isSkipped = stepData?.status === "skipped";
+                      const isPending = !stepData || stepData?.status === "pending";
+                      
+                      const isPreviousStepsDone = steps.slice(0, idx).every(s => s.data?.status === "done" || s.data?.status === "skipped");
+                      const isActive = isPending && isPreviousStepsDone;
+
+                      const cleanTitle = step.title
+                        .replace(/^\d+\.\s*/, "")
+                        .replace(" Phase", "");
+
+                      const isLast = idx === steps.length - 1;
+
+                      return (
+                        <div 
+                          key={idx} 
+                          onClick={() => step.stepKey !== 'procurement' && setSelectedDetailStep(step.stepKey)}
+                          className="relative flex items-start gap-3.5 group cursor-pointer"
+                        >
+                          {/* Vertical Connecting Line */}
+                          {!isLast && (
+                            <div 
+                              className={`absolute left-[17px] top-[34px] bottom-[-14px] w-[2px] ${
+                                isDone ? "bg-[#83ab1f]" : "bg-slate-200"
+                              }`} 
+                            />
+                          )}
+
+                          {/* Step Badge Icon */}
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-xs shrink-0 z-10 transition-all shadow-2xs ${
                             isDone 
-                              ? "text-slate-800 font-bold" 
+                              ? "bg-[#83ab1f] text-white ring-2 ring-[#83ab1f]/20" 
                               : isActive 
-                              ? "text-emerald-700 font-bold" 
+                              ? "bg-[#83ab1f] text-white ring-4 ring-[#83ab1f]/25 animate-pulse" 
                               : isSkipped 
-                              ? "text-slate-500 line-through decoration-slate-300"
-                              : "text-slate-400"
+                              ? "bg-amber-500 text-white ring-2 ring-amber-500/20" 
+                              : "bg-white text-slate-400 border-2 border-slate-200"
                           }`}>
-                            {step.title}
-                            {step.metaInfo && (
-                              <span className="ml-2 bg-slate-100 text-slate-650 border border-slate-200/60 text-[10px] font-semibold px-2 py-0.5 rounded-full inline-block">
-                                {step.metaInfo}
+                            {isDone ? <Check className="w-4.5 h-4.5 stroke-[3]" /> : idx + 1}
+                          </div>
+
+                          {/* Step Info Card */}
+                          <div className={`flex-1 min-w-0 p-3.5 rounded-2xl border transition-all ${
+                            isActive
+                              ? "bg-[#f8faf4] border-[#83ab1f]/60 shadow-xs ring-1 ring-[#83ab1f]/20"
+                              : isDone
+                              ? "bg-white border-slate-200 shadow-2xs hover:border-slate-300"
+                              : isSkipped
+                              ? "bg-amber-50/40 border-amber-200/80 shadow-2xs"
+                              : "bg-slate-50/40 border-slate-150 opacity-90"
+                          }`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <h5 className="text-xs font-black text-slate-900 truncate">
+                                {cleanTitle}
+                              </h5>
+
+                              <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md uppercase tracking-wider shrink-0 border ${
+                                isDone ? "bg-[#f0f7e6] text-[#789d1b] border-[#d2e8aa]" :
+                                isActive ? "bg-[#83ab1f] text-white border-[#83ab1f]" :
+                                isSkipped ? "bg-amber-100 text-amber-700 border-amber-200" :
+                                "bg-slate-100 text-slate-500 border-slate-200"
+                              }`}>
+                                {isDone ? "Done" : isActive ? "Active" : isSkipped ? "Skipped" : "Pending"}
                               </span>
-                            )}
-                          </h4>
-                          
-                          {/* Completed dates and status pills */}
-                          <div className="flex flex-wrap items-center gap-2 mt-1 sm:mt-0">
-                            {isDone && stepData?.completed_date && (
-                              <span className="text-xs text-slate-600 flex items-center gap-1 font-medium bg-slate-50 border border-slate-100/60 px-2 py-0.5 rounded-md shadow-sm">
-                                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                                {formatDate(stepData.completed_date)}
-                              </span>
-                            )}
-                            {isSkipped && stepData?.completed_date && (
-                              <span className="text-xs text-amber-750 flex items-center gap-1 font-medium bg-amber-50/70 border border-amber-100 px-2 py-0.5 rounded-md shadow-sm">
-                                <Calendar className="w-3.5 h-3.5 text-amber-500" />
-                                {formatDate(stepData.completed_date)}
-                              </span>
-                            )}
-                            {isActive && (
-                              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1 animate-pulse">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block animate-ping" />
-                                Active Step
-                              </span>
-                            )}
-                            {isPending && !isActive && (
-                              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider pl-1">
-                                Waiting
-                              </span>
-                            )}
-                            {step.stepKey !== 'procurement' && (
-                              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50/65 border border-emerald-200/50 rounded-md px-2 py-0.5 shadow-sm transition-all hover:bg-emerald-100/85 flex items-center gap-1">
-                                <Eye className="w-3 h-3" /> View Details
-                              </span>
-                            )}
+                            </div>
+
+                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100/80 text-[10px]">
+                              {stepData?.completed_date ? (
+                                <span className="text-slate-500 font-semibold flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-[#83ab1f]" />
+                                  {formatDateReadable(stepData.completed_date)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-medium">
+                                  {isActive ? "Currently in process" : "Pending step"}
+                                </span>
+                              )}
+
+                              {step.stepKey !== 'procurement' && (
+                                <span className="text-[10px] font-bold text-[#83ab1f] flex items-center gap-0.5">
+                                  Details <ChevronRight className="w-3 h-3" />
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop View: Horizontal Node Stepper Timeline */}
+                  <div className="hidden sm:block w-full overflow-x-auto pt-2 pb-3 no-scrollbar">
+                    <div className="w-full flex items-start justify-between relative px-2">
+                      
+                      {steps.map((step, idx) => {
+                        const stepData = step.data;
+                        const isDone = stepData?.status === "done";
+                        const isSkipped = stepData?.status === "skipped";
+                        const isPending = !stepData || stepData?.status === "pending";
                         
-                        <p className={`text-xs mt-1.5 leading-relaxed font-medium ${isPending ? "text-slate-400" : "text-slate-600"}`}>
-                          {step.description}
-                        </p>
-                      </div>
+                        const isPreviousStepsDone = steps.slice(0, idx).every(s => s.data?.status === "done" || s.data?.status === "skipped");
+                        const isActive = isPending && isPreviousStepsDone;
+
+                        const formattedTitle = step.title
+                          .replace(" Phase", "")
+                          .replace("Laboratory Testing", "Lab Testing")
+                          .replace("Raw Material Procurement", "Procurement")
+                          .replace("Quality Control (QC)", "QC Stage")
+                          .replace("Shipping & Dispatch", "Dispatch");
+
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => step.stepKey !== 'procurement' && setSelectedDetailStep(step.stepKey)}
+                            className="flex-1 flex flex-col items-center text-center cursor-pointer group relative px-1 shrink-0 sm:shrink"
+                          >
+                            {/* Horizontal Connecting Line between nodes */}
+                            {idx < steps.length - 1 && (
+                              <div
+                                className={`absolute top-[16px] left-[50%] w-full h-[2.5px] z-0 transition-colors ${
+                                  isDone ? "bg-[#83ab1f]" : "bg-slate-200"
+                                }`}
+                              />
+                            )}
+
+                            {/* Node Circle */}
+                            <div className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shadow-xs transition-transform group-hover:scale-110 ${
+                              isDone 
+                                ? "bg-[#83ab1f] text-white border-2 border-[#83ab1f] ring-4 ring-[#83ab1f]/15" 
+                                : isActive 
+                                ? "bg-[#83ab1f] text-white border-2 border-[#83ab1f] ring-4 ring-[#83ab1f]/30 ring-offset-1" 
+                                : isSkipped 
+                                ? "bg-amber-500 text-white border-2 border-amber-500" 
+                                : "bg-white text-slate-600 border-2 border-slate-200"
+                            }`}>
+                              {isDone ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : idx + 1}
+                            </div>
+
+                            {/* Step Title */}
+                            <div className="text-[10px] sm:text-[10.5px] font-bold text-slate-800 mt-2 leading-tight group-hover:text-[#83ab1f] transition-colors max-w-[80px] sm:max-w-[72px]">
+                              {formattedTitle}
+                            </div>
+
+                            {/* Step Status Subtitle */}
+                            <div className="text-[9.5px] font-semibold mt-1">
+                              {isDone ? (
+                                <span className="text-[#83ab1f]">Completed</span>
+                              ) : isActive ? (
+                                <span className="text-[#83ab1f] font-extrabold">Active Stage</span>
+                              ) : isSkipped ? (
+                                <span className="text-amber-600">Skipped</span>
+                              ) : (
+                                <span className="text-slate-400">Pending</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
+
               </div>
 
-            </CardContent>
-          </Card>
-        </div>
+            </div>
 
-        {/* Right Side: Order Recipe details and Shipping information (1 Column Wide) */}
-        <div className="lg:col-span-1 space-y-5 w-full">
-          
-          {/* Order Details card */}
-          <Card className="border border-slate-100/80 shadow-[0_4px_20px_rgba(0,0,0,0.02)] overflow-hidden bg-white/95 backdrop-blur-sm rounded-2xl">
-            <CardHeader className="border-b border-slate-50 p-4 bg-slate-50/40">
-              <div className="flex items-center gap-2">
-                <div className="w-6.5 h-6.5 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
+            {/* DELIVERY LOCATION */}
+            {selectedClient.billing_address && (
+              <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xs relative overflow-hidden">
+                {/* Top Header */}
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-9 h-9 rounded-xl bg-[#f0f7e6] text-[#789d1b] flex items-center justify-center border border-[#d2e8aa] shrink-0">
+                    <MapPin className="w-4.5 h-4.5 stroke-[2.2]" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 tracking-wider uppercase">DELIVERY LOCATION</h3>
+                    <p className="text-[11px] text-slate-400 font-medium mt-0.5">Registered shipping address</p>
+                  </div>
+                </div>
+
+                {/* Address Card Container */}
+                <div className="bg-[#f6fbf0] border border-[#e1f0cc] rounded-2xl p-4 sm:p-5 space-y-1 shadow-2xs w-full">
+                  {selectedClient.billing_address.address_line_1 && (
+                    <div className="text-sm sm:text-base font-black text-slate-900 leading-tight">
+                      {selectedClient.billing_address.address_line_1}
+                    </div>
+                  )}
+                  {(selectedClient.billing_address.city || selectedClient.billing_address.state) && (
+                    <div className="text-xs sm:text-sm font-semibold text-slate-500">
+                      {[selectedClient.billing_address.city, selectedClient.billing_address.state].filter(Boolean).join(", ")}
+                    </div>
+                  )}
+                  {selectedClient.billing_address.pin_code && (
+                    <div className="text-xs sm:text-sm font-semibold text-slate-500">
+                      Pin Code: {selectedClient.billing_address.pin_code}
+                    </div>
+                  )}
+                  <div className="text-xs sm:text-sm font-black text-[#789d1b] pt-1">
+                    {selectedClient.billing_address.country || "India"}
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* Right Side Cards Column (4 Cols) */}
+          <div className="lg:col-span-4 space-y-6">
+
+            {/* ORDER BLEND RECIPE */}
+            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xs space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#f0f7e6] text-[#789d1b] flex items-center justify-center border border-[#d2e8aa] shrink-0">
                   <Package className="w-4 h-4" />
                 </div>
-                <CardTitle className="text-xs font-bold uppercase tracking-wider text-slate-500">Order Blend Recipe</CardTitle>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-left text-xs">
-                  <thead>
-                    <tr className="bg-slate-50/20 border-b border-slate-100">
-                      <th className="p-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Supplement Item</th>
-                      <th className="p-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Type</th>
-                      <th className="p-3.5 text-xs font-semibold text-slate-400 tracking-wider text-right">Quantity</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-xs">
-                    {selectedClient.items && selectedClient.items.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/20 odd:bg-slate-50/[0.15] transition-colors">
-                        <td className="p-3.5 font-semibold text-slate-705">
-                          <div>{item.item_name}</div>
-                          {item.item_weight && (
-                            <div className="text-[10px] font-semibold text-slate-400 mt-0.5">
-                              {item.item_weight} {item.item_weight_type || ""}
-                            </div>
-                          )}
-                        </td>
-                        <td className="p-3.5 text-slate-500 capitalize">{item.item_type || "N/A"}</td>
-                        <td className="p-3.5 text-slate-700 font-semibold text-right">{item.quantity || 1} jars</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Billing / Address Summary */}
-          {selectedClient.billing_address && (
-            <Card className="border border-slate-100/80 shadow-[0_4px_20px_rgba(0,0,0,0.02)] bg-white/95 backdrop-blur-sm rounded-2xl">
-              <CardHeader className="pb-1 pt-4 px-4 border-b border-slate-50 bg-slate-50/40">
-                <div className="flex items-center gap-2 pb-2">
-                  <MapPin className="w-4 h-4 text-slate-450" />
-                  <CardTitle className="text-xs font-bold uppercase tracking-wider text-slate-400">Delivery Location</CardTitle>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 tracking-tight leading-tight">ORDER BLEND RECIPE</h3>
+                  <p className="text-[11px] text-slate-400 font-medium">Formulated supplement items</p>
                 </div>
-              </CardHeader>
-              <CardContent className="p-4">
-                <p className="text-xs text-slate-600 leading-relaxed font-semibold bg-slate-50 border border-slate-100 rounded-xl p-3">
-                  {selectedClient.billing_address.address_line_1 && `${selectedClient.billing_address.address_line_1}, `}
-                  {selectedClient.billing_address.city && `${selectedClient.billing_address.city}, `}
-                  {selectedClient.billing_address.state && `${selectedClient.billing_address.state} `}
-                  {selectedClient.billing_address.pin_code && `- ${selectedClient.billing_address.pin_code}, `}
-                  {selectedClient.billing_address.country || "India"}
-                </p>
-              </CardContent>
-            </Card>
-          )}
+              </div>
+
+              <div className="space-y-3">
+                {selectedClient.items && selectedClient.items.map((item, idx) => (
+                  <div 
+                    key={idx} 
+                    className="flex items-center justify-between p-3 bg-slate-50/70 border border-slate-100 rounded-2xl hover:border-[#d2e8aa] transition-all"
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-slate-900">
+                        {item.item_name ? item.item_name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'N/A'}
+                      </div>
+                      {item.item_weight && (
+                        <div className="text-[11px] text-slate-400 font-medium mt-0.5">
+                          Weight: <span className="font-semibold text-slate-600">{item.item_weight} {item.item_weight_type || ""}</span>
+                        </div>
+                      )}
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg bg-[#f0f7e6] text-[#789d1b] border border-[#d2e8aa] text-[11px] font-bold">
+                      {item.quantity || 1} Unit
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Mobile View: 3 Executive Styled Stat Cards */}
+            <div className="grid md:hidden grid-cols-1 gap-3">
+              {/* Card 1: TOTAL ITEMS */}
+              <div className="bg-gradient-to-r from-[#f7fcf0] via-white to-white rounded-2xl p-4 border border-[#d6eaaf] shadow-xs flex items-center justify-between relative overflow-hidden">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-[#f0f7e6] text-[#83ab1f] flex items-center justify-center border border-[#d2e8aa] shrink-0 shadow-2xs">
+                    <FileText className="w-5 h-5 stroke-[2]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold tracking-wider text-slate-500 uppercase">
+                      TOTAL ITEMS
+                    </div>
+                    <div className="text-xs font-semibold text-[#789d1b] mt-0.5 truncate">
+                      Invoice #{selectedClient?.invoice_number || selectedClient?.common_id?.slice(-6)}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-2xl font-bold text-slate-800 shrink-0 ml-3 bg-white px-3.5 py-1 rounded-xl border border-slate-100 shadow-2xs">
+                  {selectedClient?.items?.length || 0}
+                </div>
+              </div>
+
+              {/* Card 2: CURRENT STAGE */}
+              <div className="bg-gradient-to-r from-[#fff9f5] via-white to-white rounded-2xl p-4 border border-[#fde4cf] shadow-xs flex items-center justify-between relative overflow-hidden">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-[#fff4e8] text-[#e05638] flex items-center justify-center border border-[#fcd5b5] shrink-0 shadow-2xs">
+                    <Clock className="w-5 h-5 stroke-[2]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold tracking-wider text-slate-500 uppercase">
+                      CURRENT STAGE
+                    </div>
+                    <div className="text-xs font-semibold text-[#e05638] mt-0.5 truncate">
+                      {overallStatus.text}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-2xl font-bold text-slate-800 shrink-0 ml-3 bg-white px-3.5 py-1 rounded-xl border border-slate-100 shadow-2xs">
+                  {currentStageNum}
+                </div>
+              </div>
+
+              {/* Card 3: COMPLETED STAGES */}
+              <div className="bg-gradient-to-r from-[#f0fdf4] via-white to-white rounded-2xl p-4 border border-[#bbf7d0] shadow-xs flex items-center justify-between relative overflow-hidden">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-[#e8f9ee] text-[#20b657] flex items-center justify-center border border-[#bbf0cb] shrink-0 shadow-2xs">
+                    <CheckCircle2 className="w-5 h-5 stroke-[2]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold tracking-wider text-slate-500 uppercase">
+                      COMPLETED STAGES
+                    </div>
+                    <div className="flex items-center gap-1 text-xs font-semibold text-[#20b657] mt-0.5 truncate">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{progressPercent}% Completed</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-2xl font-bold text-slate-800 shrink-0 ml-3 bg-white px-3.5 py-1 rounded-xl border border-slate-100 shadow-2xs">
+                  {totalCompletedSteps}
+                </div>
+              </div>
+            </div>
+
+            {/* QUICK LINKS */}
+            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xs space-y-3">
+              <div className="text-xs font-extrabold text-slate-800 uppercase tracking-wider mb-2">
+                QUICK LINKS
+              </div>
+              
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailStep("production")}
+                  className="w-full flex items-center justify-between p-2.5 text-xs font-semibold text-slate-700 rounded-xl hover:bg-slate-50 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-slate-400" /> Production Details
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailStep("lab_report")}
+                  className="w-full flex items-center justify-between p-2.5 text-xs font-semibold text-slate-700 rounded-xl hover:bg-slate-50 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-slate-400" /> Lab Testing
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailStep("client_label")}
+                  className="w-full flex items-center justify-between p-2.5 text-xs font-semibold text-slate-700 rounded-xl hover:bg-slate-50 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-slate-400" /> Labels
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailStep("formulation")}
+                  className="w-full flex items-center justify-between p-2.5 text-xs font-semibold text-slate-700 rounded-xl hover:bg-slate-50 transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2">
+                    <Package className="w-4 h-4 text-slate-400" /> Formulation
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                </button>
+              </div>
+            </div>
+
+          </div>
 
         </div>
 
       </div>
 
-      {/* Premium Read-Only Phase Details Modal */}
+      {/* Read-Only Phase Details Modal */}
       {selectedDetailStep && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-50 flex items-center justify-center p-4 transition-all duration-300">
-          <div className="bg-white/95 backdrop-blur-lg rounded-3xl border border-slate-100 max-w-4xl w-full max-h-[85vh] shadow-2xl relative flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-50 flex items-center justify-center p-4 sm:p-6 transition-all duration-300">
+          <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 max-w-4xl w-full max-h-[85dvh] sm:max-h-[85vh] m-auto shadow-2xl relative flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            
             {/* Modal Header */}
-            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40 shrink-0">
-              <div className="space-y-0.5">
-                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-100">
+            <div className="px-3.5 py-3 sm:px-6 sm:py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/40 shrink-0 gap-2">
+              <div className="space-y-0.5 min-w-0 flex-1">
+                <h3 className="text-sm sm:text-base font-bold text-slate-800 flex items-center gap-2 truncate">
+                  <span className="p-1 sm:p-1.5 rounded-lg bg-[#f2f9eb] text-[#99c229] border border-[#ddf0af] shrink-0">
                     {(() => {
                       const step = steps.find(s => s.stepKey === selectedDetailStep);
                       if (step) {
@@ -836,35 +1469,29 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                       return <Package className="w-4 h-4" />;
                     })()}
                   </span>
-                  {steps.find(s => s.stepKey === selectedDetailStep)?.title || "Stage Details"}
+                  <span className="truncate">{steps.find(s => s.stepKey === selectedDetailStep)?.title || "Stage Details"}</span>
                 </h3>
-                <p className="text-xs text-slate-500 font-medium">
+                <p className="text-[11px] sm:text-xs text-slate-500 font-medium truncate">
                   {steps.find(s => s.stepKey === selectedDetailStep)?.description}
                 </p>
               </div>
               <button 
                 onClick={() => setSelectedDetailStep(null)}
-                className="p-1.5 rounded-xl border border-slate-100 hover:border-slate-200 text-slate-400 hover:text-slate-600 bg-white hover:scale-105 active:scale-95 transition-all shadow-sm"
+                className="p-1.5 rounded-xl border border-slate-100 hover:border-slate-200 text-slate-400 hover:text-slate-600 bg-white transition-all shadow-sm shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 md:p-8 flex-1 overflow-y-auto min-h-0">
+            <div className="p-3 sm:p-6 md:p-8 flex-1 overflow-y-auto min-h-0 [overscroll-behavior:contain] [webkit-overflow-scrolling:touch]">
               {detailsLoading ? (
                 <div className="flex flex-col items-center justify-center py-16 gap-3">
-                  <div className="w-10 h-10 rounded-full border-[3px] border-emerald-100 border-t-emerald-500 animate-spin" />
+                  <div className="w-10 h-10 rounded-full border-[3px] border-[#f2f9eb] border-t-[#99c229] animate-spin" />
                   <p className="text-slate-500 text-xs font-semibold tracking-wide">Retrieving phase records...</p>
                 </div>
               ) : (() => {
-                const getImageUrl = (url?: string | null) => {
-                  if (!url) return '';
-                  if (url.startsWith('http') || url.startsWith('data:')) return url;
-                  return `https://files.fggroup.in/${url}`;
-                };
-
-                const formatDateReadable = (dateStr?: string) => {
+                const formatModalDateReadable = (dateStr?: string) => {
                   if (!dateStr) return '-';
                   return new Date(dateStr).toLocaleDateString("en-IN", {
                     day: "numeric",
@@ -887,87 +1514,145 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                         </div>
                       );
                     }
+                    const currentTab = activeFormulationTab >= list.length ? 0 : activeFormulationTab;
+                    const currentForm = list[currentTab] || list[0];
+
                     return (
-                      <div className="space-y-8">
-                        {list.map((form: any) => (
-                          <div key={form._id} className="border border-slate-100 rounded-2xl p-5 md:p-6 space-y-6 bg-slate-50/[0.15]">
-                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
-                              <div>
-                                <h4 className="text-sm font-bold text-slate-800">{form.productName}</h4>
-                                <p className="text-xs text-slate-500 mt-0.5">Updated: {formatDateReadable(form.updatedAt)}</p>
-                              </div>
-                              <span className="px-3 py-1 bg-emerald-500/10 text-emerald-700 font-bold text-xs rounded-full border border-emerald-200/35">
-                                Scoop Size: {form.scoopSize} gm
-                              </span>
+                      <div className="space-y-6">
+                        {/* Product Tabs Navigation for Multiple Formulations */}
+                        {list.length > 1 && (
+                          <div className="flex items-center gap-2">                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectFormulationTab(currentTab - 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+
+                            <div
+                              ref={formulationTabScrollRef}
+                              onScroll={() => handleTabScroll(formulationTabScrollRef.current, list.length, setActiveFormulationTab)}
+                              className="bg-slate-100/80 p-1.5 rounded-2xl flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth border border-slate-200/80 shadow-2xs flex-1 snap-x snap-mandatory min-w-0"
+                            >
+                              {list.map((form: any, idx: number) => {
+                                const isActive = idx === currentTab;
+                                return (
+                                  <button
+                                    key={form._id || idx}
+                                    type="button"
+                                    onClick={() => selectFormulationTab(idx, list.length)}
+                                    className={`flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all shrink-0 cursor-pointer w-full sm:w-[calc(33.333%-0.375rem)] lg:w-[calc(25%-0.375rem)] snap-center sm:snap-start truncate ${
+                                      isActive
+                                        ? "bg-white text-[#7aa823] shadow-sm border border-[#ddf0af] ring-2 ring-[#7aa823]/10"
+                                        : "text-slate-600 hover:text-slate-900 hover:bg-white/60 font-bold"
+                                    }`}
+                                  >
+                                    <FlaskConical className={`w-4 h-4 shrink-0 ${isActive ? "text-[#7aa823]" : "text-slate-400"}`} />
+                                    <span className="truncate">{getValidProductName(form, idx)}</span>
+                                    {form.scoopSize && (
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono shrink-0 ${
+                                        isActive ? "bg-[#f2f9eb] text-[#7aa823] border border-[#ddf0af]" : "bg-slate-200/70 text-slate-500"
+                                      }`}>
+                                        {form.scoopSize}g
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
                             </div>
 
-                            {/* Nutrients Table */}
-                            <div className="space-y-3">
-                              <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Formulation Specifications</h5>
-                              <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm">
-                                <table className="w-full text-left text-xs border-collapse">
-                                  <thead>
-                                    <tr className="bg-slate-50/75 border-b border-slate-150 text-slate-500">
-                                      <th className="p-3 font-bold uppercase tracking-wider">Nutrients</th>
-                                      <th className="p-3 font-bold text-center">Per {form.scoopSize || 35}g scoop</th>
-                                      <th className="p-3 font-bold text-center">Per 100g</th>
-                                      <th className="p-3 font-bold text-center">% RDA</th>
-                                    </tr>
-                                  </thead>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectFormulationTab(currentTab + 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Selected Formulation Card */}
+                        <div key={currentForm._id} className="border border-slate-100 rounded-2xl p-5 md:p-6 space-y-6 bg-slate-50/[0.15]">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-800">{getValidProductName(currentForm, currentTab || 0)}</h4>
+                              <p className="text-xs text-slate-500 mt-0.5">Updated: {formatModalDateReadable(currentForm.updatedAt)}</p>
+                            </div>
+                            <span className="px-3 py-1 bg-[#f2f9eb] text-[#7aa823] font-bold text-xs rounded-full border border-[#ddf0af]">
+                              Scoop Size: {currentForm.scoopSize} gm
+                            </span>
+                          </div>
+
+                          {/* Nutrients Table */}
+                          <div className="space-y-3">
+                            <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Formulation Specifications</h5>
+                            <div className="border border-slate-150/70 rounded-xl overflow-hidden w-full bg-white shadow-sm">
+                              <table className="w-full text-left text-[11px] sm:text-xs border-collapse table-fixed">
+                                <thead>
+                                  <tr className="bg-slate-50/75 border-b border-slate-150 text-slate-500">
+                                    <th className="py-2.5 px-2 sm:px-3 font-bold uppercase tracking-wider w-[36%] sm:w-[40%]">Nutrients</th>
+                                    <th className="py-2.5 px-1.5 sm:px-3 font-bold text-center w-[22%] sm:w-[20%]">Per {currentForm.scoopSize || 35}g scoop</th>
+                                    <th className="py-2.5 px-1.5 sm:px-3 font-bold text-center w-[22%] sm:w-[20%]">Per 100g</th>
+                                    <th className="py-2.5 px-1.5 sm:px-3 font-bold text-center w-[20%] sm:w-[20%]">% RDA</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 font-medium">
+                                  {(currentForm.nutritionItems || []).map((nut: any, idx: number) => {
+                                    const v = (nut.rda || '').toString().trim();
+                                    const rdaStr = !v ? '-' : v.includes('%') ? v : `${v}%`;
+                                    return (
+                                      <tr key={idx} className="hover:bg-slate-50/30">
+                                        <td className="py-2.5 px-2 sm:px-3 text-slate-800 font-bold break-words">{nut.itemName}</td>
+                                        <td className="py-2.5 px-1.5 sm:px-3 text-slate-650 text-center whitespace-nowrap">{nut.weight35gm ?? '-'}</td>
+                                        <td className="py-2.5 px-1.5 sm:px-3 text-slate-650 text-center whitespace-nowrap">{nut.weight100gm ?? '-'}</td>
+                                        <td className="py-2.5 px-1.5 sm:px-3 text-slate-700 font-semibold text-center whitespace-nowrap">{rdaStr}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Amino Acids Profile */}
+                          {currentForm.aminoAcidProfile && currentForm.aminoAcidProfile.length > 0 && (
+                            <div className="space-y-3 pt-2">
+                              <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amino Acid Profile</h5>
+                              <div className="border border-slate-150/70 rounded-xl overflow-hidden w-full bg-white shadow-sm">
+                                <table className="w-full text-left text-[11px] sm:text-xs border-collapse">
                                   <tbody className="divide-y divide-slate-100 font-medium">
-                                    {(form.nutritionItems || []).map((nut: any, idx: number) => {
-                                      const v = (nut.rda || '').toString().trim();
-                                      const rdaStr = !v ? '-' : v.includes('%') ? v : `${v}%`;
-                                      return (
-                                        <tr key={idx} className="hover:bg-slate-50/30">
-                                          <td className="p-3 text-slate-800 font-bold">{nut.itemName}</td>
-                                          <td className="p-3 text-slate-650 text-center">{nut.weight35gm ?? '-'}</td>
-                                          <td className="p-3 text-slate-650 text-center">{nut.weight100gm ?? '-'}</td>
-                                          <td className="p-3 text-slate-700 font-semibold text-center">{rdaStr}</td>
+                                    {currentForm.aminoAcidProfile.map((cat: any) => (
+                                      <React.Fragment key={cat._id}>
+                                        <tr className="bg-slate-50/70">
+                                          <td className="py-2.5 px-3 sm:px-3.5 font-bold text-slate-800" colSpan={2}>
+                                            <div className="flex justify-between items-center">
+                                              <span>{cat.title}</span>
+                                              {cat.value && (
+                                                <span className="text-[10px] sm:text-[11px] font-bold text-slate-700 bg-white border border-slate-200/60 rounded px-2 py-0.5">
+                                                  {cat.value} {cat.unit || ''}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
                                         </tr>
-                                      );
-                                    })}
+                                        {(cat.items || []).map((item: any) => (
+                                          <tr key={item._id} className="hover:bg-slate-50/20">
+                                            <td className="py-2.5 px-3 sm:px-3.5 pl-4 sm:pl-6 text-slate-600 break-words">{item.name}</td>
+                                            <td className="py-2.5 px-3 sm:px-3.5 pr-4 sm:pr-6 text-right font-bold text-slate-700 whitespace-nowrap">{item.value} {item.unit || ''}</td>
+                                          </tr>
+                                        ))}
+                                      </React.Fragment>
+                                    ))}
                                   </tbody>
                                 </table>
                               </div>
                             </div>
-
-                            {/* Amino Acids Profile */}
-                            {form.aminoAcidProfile && form.aminoAcidProfile.length > 0 && (
-                              <div className="space-y-3 pt-2">
-                                <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Amino Acid Profile</h5>
-                                <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm">
-                                  <table className="w-full text-left text-xs border-collapse">
-                                    <tbody className="divide-y divide-slate-100 font-medium">
-                                      {form.aminoAcidProfile.map((cat: any) => (
-                                        <React.Fragment key={cat._id}>
-                                          <tr className="bg-slate-50/70">
-                                            <td className="p-3 font-bold text-slate-800" colSpan={2}>
-                                              <div className="flex justify-between items-center">
-                                                <span>{cat.title}</span>
-                                                {cat.value && (
-                                                  <span className="text-[11px] font-bold text-slate-700 bg-white border border-slate-200/60 rounded px-2 py-0.5">
-                                                    {cat.value} {cat.unit || ''}
-                                                  </span>
-                                                )}
-                                              </div>
-                                            </td>
-                                          </tr>
-                                          {(cat.items || []).map((item: any) => (
-                                            <tr key={item._id} className="hover:bg-slate-50/20">
-                                              <td className="p-3 pl-6 text-slate-600">{item.name}</td>
-                                              <td className="p-3 pr-6 text-right font-bold text-slate-700">{item.value} {item.unit || ''}</td>
-                                            </tr>
-                                          ))}
-                                        </React.Fragment>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                          )}
+                        </div>
                       </div>
                     );
                   }
@@ -989,17 +1674,17 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4 border-b border-slate-100">
                               <div className="space-y-1">
                                 <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Design Project</span>
-                                <h4 className="text-sm font-bold text-slate-800">{design.productName}</h4>
+                                <h4 className="text-sm font-bold text-slate-800">{getValidProductName(design, 0)}</h4>
                                 <p className="text-xs text-slate-500 font-medium">Brand: <strong className="text-slate-700 font-bold">{design.brandName}</strong></p>
                               </div>
                               <div className="space-y-1.5 md:text-right">
                                 <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Status</span>
                                 <span className={`inline-block px-3 py-1 font-bold text-xs rounded-full border ${
                                   design.client_approval_status === 'approved' || design.final_approval_by_client
-                                    ? "bg-emerald-500/10 text-emerald-700 border-emerald-200/50" 
+                                    ? "bg-[#e8f9ee] text-[#20b657] border-[#bbf0cb]" 
                                     : design.client_approval_status === 'rejected'
-                                    ? "bg-red-500/10 text-red-700 border-red-200/50"
-                                    : "bg-amber-500/10 text-amber-700 border-amber-200/50"
+                                    ? "bg-red-50 text-red-700 border-red-200"
+                                    : "bg-amber-50 text-amber-700 border-amber-200"
                                 }`}>
                                   {design.client_approval_status === 'approved' || design.final_approval_by_client 
                                     ? "✓ Approved" 
@@ -1020,7 +1705,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                   <h5 className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
                                     <FileText className="w-3.5 h-3.5" /> Product Label Artwork
                                   </h5>
-                                  <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.01] transition-all cursor-pointer relative group" onClick={() => window.open(getImageUrl(design.label_preview_image), '_blank')}>
+                                  <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.01] transition-all cursor-pointer relative group" onClick={() => setActiveImageUrl(getImageUrl(design.label_preview_image))}>
                                     <img src={getImageUrl(design.label_preview_image)} alt="Label Artwork" className="w-full h-48 object-contain p-3" />
                                     <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                                       <span className="text-xs text-white font-bold bg-slate-900/80 px-3 py-1.5 rounded-lg border border-white/20 flex items-center gap-1">
@@ -1033,9 +1718,9 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                               {design.final_approval_image && (
                                 <div className="space-y-2">
                                   <h5 className="text-xs font-bold text-slate-550 flex items-center gap-1.5">
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Client Confirmation Screenshot
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-[#20b657]" /> Client Confirmation Screenshot
                                   </h5>
-                                  <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.01] transition-all cursor-pointer relative group" onClick={() => window.open(getImageUrl(design.final_approval_image), '_blank')}>
+                                  <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.01] transition-all cursor-pointer relative group" onClick={() => setActiveImageUrl(getImageUrl(design.final_approval_image))}>
                                     <img src={getImageUrl(design.final_approval_image)} alt="Client Approval" className="w-full h-48 object-contain p-3" />
                                     <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                                       <span className="text-xs text-white font-bold bg-slate-900/80 px-3 py-1.5 rounded-lg border border-white/20 flex items-center gap-1">
@@ -1075,7 +1760,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                         type="text" 
                                         value={approverName}
                                         onChange={(e) => setApproverName(e.target.value)}
-                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-[#99c229]"
                                         placeholder="e.g. John Doe (Proprietor)"
                                       />
                                     </div>
@@ -1083,7 +1768,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                       <Button size="sm" variant="outline" onClick={() => { setApprovingDesignId(null); setApproverName(""); }} disabled={submittingAction}>
                                         Cancel
                                       </Button>
-                                      <Button size="sm" onClick={() => handleClientLabelAction(design._id, 'approve')} disabled={submittingAction || !approverName.trim()} className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                                      <Button size="sm" onClick={() => handleClientLabelAction(design._id, 'approve')} disabled={submittingAction || !approverName.trim()} className="btn-target-brand">
                                         {submittingAction ? "Submitting..." : "Confirm Approval"}
                                       </Button>
                                     </div>
@@ -1096,7 +1781,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                         value={rejectionReason}
                                         onChange={(e) => setRejectionReason(e.target.value)}
                                         rows={3}
-                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500 resize-none"
+                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
                                         placeholder="e.g. Logo alignment is slightly off, spelling of supplement in nutritional facts is incorrect."
                                       />
                                     </div>
@@ -1104,7 +1789,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                       <Button size="sm" variant="outline" onClick={() => { setRejectingDesignId(null); setRejectionReason(""); }} disabled={submittingAction}>
                                         Cancel
                                       </Button>
-                                      <Button size="sm" onClick={() => handleClientLabelAction(design._id, 'reject')} disabled={submittingAction || !rejectionReason.trim()} className="bg-red-600 hover:bg-red-750 text-white font-semibold">
+                                      <Button size="sm" onClick={() => handleClientLabelAction(design._id, 'reject')} disabled={submittingAction || !rejectionReason.trim()} className="bg-red-600 text-white font-semibold">
                                         {submittingAction ? "Submitting..." : "Submit Rejection"}
                                       </Button>
                                     </div>
@@ -1114,14 +1799,14 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                     <Button 
                                       size="sm" 
                                       onClick={() => setRejectingDesignId(design._id)}
-                                      className="bg-white border border-red-200 text-red-650 hover:bg-red-50/50 hover:border-red-350 font-bold transition-all"
+                                      className="bg-white border border-red-200 text-red-600 hover:bg-red-50 font-bold"
                                     >
                                       Reject Design
                                     </Button>
                                     <Button 
                                       size="sm" 
                                       onClick={() => setApprovingDesignId(design._id)}
-                                      className="bg-emerald-600 text-white hover:bg-emerald-700 font-bold transition-all shadow-sm"
+                                      className="btn-target-brand"
                                     >
                                       Approve Design
                                     </Button>
@@ -1135,6 +1820,16 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                     );
                   }
                   case 'client_label': {
+                    if (selectedClient.production_process?.client_label?.status === 'skipped') {
+                      return (
+                        <div className="flex flex-col items-center justify-center p-8 bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                            <Slash className="w-6 h-6 text-slate-500" />
+                          </div>
+                          <p className="text-sm font-bold text-slate-800">Label Approval Skipped</p>
+                        </div>
+                      );
+                    }
                     const list = detailsData?.clientLabels || [];
                     if (list.length === 0) {
                       return (
@@ -1156,16 +1851,16 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                 </div>
                                 <div className="space-y-0.5">
                                   <h4 className="text-xs font-bold text-slate-800">{label.fileName}</h4>
-                                  <p className="text-[10px] text-slate-400">Uploaded: {formatDateReadable(label.createdAt)}</p>
+                                  <p className="text-[10px] text-slate-400">Uploaded: {formatModalDateReadable(label.createdAt)}</p>
                                 </div>
                               </div>
                               <div className="space-y-1.5 sm:text-right">
                                 <span className={`inline-block px-3 py-1 font-bold text-xs rounded-full border ${
                                   label.client_approval_status === 'approved' || label.final_approval_by_client
-                                    ? "bg-emerald-500/10 text-emerald-700 border-emerald-200/50" 
+                                    ? "bg-[#e8f9ee] text-[#20b657] border-[#bbf0cb]" 
                                     : label.client_approval_status === 'rejected'
-                                    ? "bg-red-500/10 text-red-700 border-red-200/50"
-                                    : "bg-amber-500/10 text-amber-700 border-amber-200/50"
+                                    ? "bg-red-50 text-red-700 border-red-200"
+                                    : "bg-amber-50 text-amber-700 border-amber-200"
                                 }`}>
                                   {label.client_approval_status === 'approved' || label.final_approval_by_client 
                                     ? "✓ Approved" 
@@ -1221,7 +1916,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                         type="text" 
                                         value={labelApproverName}
                                         onChange={(e) => setLabelApproverName(e.target.value)}
-                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-[#99c229]"
                                         placeholder="e.g. John Doe (Proprietor)"
                                       />
                                     </div>
@@ -1229,7 +1924,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                       <Button size="sm" variant="outline" onClick={() => { setApprovingLabelId(null); setLabelApproverName(""); }} disabled={submittingAction}>
                                         Cancel
                                       </Button>
-                                      <Button size="sm" onClick={() => handleClientLabelDocumentAction(label._id, 'approve')} disabled={submittingAction || !labelApproverName.trim()} className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold">
+                                      <Button size="sm" onClick={() => handleClientLabelDocumentAction(label._id, 'approve')} disabled={submittingAction || !labelApproverName.trim()} className="btn-target-brand">
                                         {submittingAction ? "Submitting..." : "Confirm Approval"}
                                       </Button>
                                     </div>
@@ -1242,7 +1937,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                         value={labelRejectionReason}
                                         onChange={(e) => setLabelRejectionReason(e.target.value)}
                                         rows={3}
-                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500 resize-none"
+                                        className="w-full text-xs font-medium border border-slate-200 rounded-xl p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
                                         placeholder="e.g. Layout scaling is incorrect, please upload PDF vector."
                                       />
                                     </div>
@@ -1250,7 +1945,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                       <Button size="sm" variant="outline" onClick={() => { setRejectingLabelId(null); setLabelRejectionReason(""); }} disabled={submittingAction}>
                                         Cancel
                                       </Button>
-                                      <Button size="sm" onClick={() => handleClientLabelDocumentAction(label._id, 'reject')} disabled={submittingAction || !labelRejectionReason.trim()} className="bg-red-600 hover:bg-red-750 text-white font-semibold">
+                                      <Button size="sm" onClick={() => handleClientLabelDocumentAction(label._id, 'reject')} disabled={submittingAction || !labelRejectionReason.trim()} className="bg-red-600 text-white font-semibold">
                                         {submittingAction ? "Submitting..." : "Submit Rejection"}
                                       </Button>
                                     </div>
@@ -1260,14 +1955,14 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                     <Button 
                                       size="sm" 
                                       onClick={() => setRejectingLabelId(label._id)}
-                                      className="bg-white border border-red-200 text-red-650 hover:bg-red-50/50 hover:border-red-350 font-bold transition-all"
+                                      className="bg-white border border-red-200 text-red-600 hover:bg-red-50 font-bold"
                                     >
                                       Reject Label
                                     </Button>
                                     <Button 
                                       size="sm" 
                                       onClick={() => setApprovingLabelId(label._id)}
-                                      className="bg-emerald-600 text-white hover:bg-emerald-700 font-bold transition-all shadow-sm"
+                                      className="btn-target-brand"
                                     >
                                       Approve Label
                                     </Button>
@@ -1281,8 +1976,8 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                     );
                   }
                   case 'production': {
-                    const list = detailsData?.productions || [];
-                    if (list.length === 0) {
+                    const rawList = detailsData?.productions || [];
+                    if (rawList.length === 0) {
                       return (
                         <div className="text-center py-12 text-slate-500">
                           <Factory className="w-12 h-12 mx-auto text-slate-350 mb-3" />
@@ -1291,92 +1986,188 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                         </div>
                       );
                     }
+
+                    // Sort productions by batch_no / createdAt ascending so they match client's product order (Batch 001, Batch 002, Batch 003...)
+                    const list = [...rawList].sort((a: any, b: any) => {
+                      const batchA = parseInt(String(a.batch_no || '').replace(/\D/g, ''), 10);
+                      const batchB = parseInt(String(b.batch_no || '').replace(/\D/g, ''), 10);
+                      if (!isNaN(batchA) && !isNaN(batchB) && batchA !== batchB) {
+                        return batchA - batchB;
+                      }
+                      const dateA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+                      const dateB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+                      return dateA - dateB;
+                    });
+
+                    const activeIndex = activeProductionTab < list.length ? activeProductionTab : 0;
+                    const activeProd = list[activeIndex] || list[0];
+
+                    // Helper to get exact product name for any production item
+                    const getProdItemName = (prodItem: any, idx: number) => {
+                      return getValidProductName(prodItem, idx);
+                    };
+
+                    const prodImages = getMediaArray(activeProd, ['images', 'production_images', 'photos', 'image', 'image_urls', 'production_photos']);
+                    const prodVideos = getMediaArray(activeProd, ['videos', 'production_videos', 'video', 'video_urls', 'production_video_urls']);
+
                     return (
-                      <div className="space-y-8">
-                        {list.map((prod: any) => (
-                          <div key={prod._id} className="border border-slate-100 rounded-2xl p-5 md:p-6 space-y-6 bg-slate-50/[0.15]">
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pb-4 border-b border-slate-100">
-                              <div className="space-y-0.5">
-                                <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Produced Blend</span>
-                                <h4 className="text-sm font-bold text-slate-800">{prod.production_itemId?.item_name || prod.production_name}</h4>
-                              </div>
-                              <div className="space-y-0.5">
-                                <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Batch Number</span>
-                                <p className="text-sm font-semibold text-slate-800">{prod.batch_no}</p>
-                              </div>
-                              <div className="space-y-0.5">
-                                <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Total Blend Weight</span>
-                                <p className="text-sm font-bold text-emerald-600">{prod.total_product_weight}</p>
-                              </div>
+                      <div className="space-y-6">
+                        {/* Product Tabs Header if multiple products exist */}
+                        {list.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectProductionTab(activeIndex - 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+
+                            <div
+                              ref={productionTabScrollRef}
+                              onScroll={() => handleTabScroll(productionTabScrollRef.current, list.length, setActiveProductionTab)}
+                              className="bg-slate-100/80 p-1.5 rounded-2xl flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth border border-slate-200/80 shadow-2xs flex-1 snap-x snap-mandatory min-w-0"
+                            >
+                              {list.map((prodItem: any, idx: number) => {
+                                const productName = getProdItemName(prodItem, idx);
+                                const isActive = idx === activeIndex;
+
+                                return (
+                                  <button
+                                    key={prodItem._id || idx}
+                                    type="button"
+                                    onClick={() => selectProductionTab(idx, list.length)}
+                                    className={`flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all shrink-0 cursor-pointer w-full sm:w-[calc(33.333%-0.375rem)] lg:w-[calc(25%-0.375rem)] snap-center sm:snap-start truncate ${
+                                      isActive
+                                        ? "bg-white text-[#20b657] shadow-sm border border-[#bbf0cb] ring-2 ring-[#20b657]/10"
+                                        : "text-slate-600 hover:text-slate-900 hover:bg-white/60 font-bold"
+                                    }`}
+                                  >
+                                    <Factory className={`w-4 h-4 shrink-0 ${isActive ? "text-[#20b657]" : "text-slate-400"}`} />
+                                    <span className="truncate">{productName}</span>
+                                  </button>
+                                );
+                              })}
                             </div>
 
-                            {/* Raw Materials details */}
-                            <div className="space-y-3">
-                              <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Raw Materials Blending details</h5>
-                              <div className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm">
-                                <table className="w-full text-left text-xs border-collapse">
-                                  <thead>
-                                    <tr className="bg-slate-50/75 border-b border-slate-150 text-slate-500">
-                                      <th className="p-3 font-bold ps-4">Sr. No.</th>
-                                      <th className="p-3 font-bold">Ingredient / Raw Type</th>
-                                      <th className="p-3 font-bold text-right pr-4">Intake Weight</th>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectProductionTab(activeIndex + 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Active Product Details */}
+                        <div className="border border-slate-100 rounded-2xl p-5 md:p-6 space-y-6 bg-slate-50/[0.15]">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pb-4 border-b border-slate-100">
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Produced Blend</span>
+                              <h4 className="text-sm font-bold text-slate-800">
+                                {getProdItemName(activeProd, activeIndex)}
+                              </h4>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Batch Number</span>
+                              <p className="text-sm font-semibold text-slate-800">{activeProd.batch_no}</p>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400">Total Blend Weight</span>
+                              <p className="text-sm font-bold text-[#20b657]">{activeProd.total_product_weight}</p>
+                            </div>
+                          </div>
+
+                          {/* Raw Materials details */}
+                          <div className="space-y-3">
+                            <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Raw Materials Blending details</h5>
+                            <div className="border border-slate-150/70 rounded-xl overflow-hidden w-full bg-white shadow-sm">
+                              <table className="w-full text-left text-[11px] sm:text-xs border-collapse table-fixed">
+                                <thead>
+                                  <tr className="bg-slate-50/75 border-b border-slate-150 text-slate-500">
+                                    <th className="py-2.5 px-2 sm:px-3 font-bold ps-3 sm:ps-4 w-[15%] sm:w-[12%]">Sr.</th>
+                                    <th className="py-2.5 px-2 sm:px-3 font-bold w-[55%] sm:w-[58%]">Ingredient / Raw Type</th>
+                                    <th className="py-2.5 px-2 sm:px-3 font-bold text-right pr-3 sm:pr-4 w-[30%] sm:w-[30%]">Intake Weight</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 font-medium">
+                                  {(activeProd.productionRawItems || []).map((raw: any, index: number) => (
+                                    <tr key={index} className="hover:bg-slate-50/20">
+                                      <td className="py-2.5 px-2 sm:px-3 ps-3 sm:ps-4 text-slate-500">{index + 1}</td>
+                                      <td className="py-2.5 px-2 sm:px-3 text-slate-800 font-bold break-words">{raw.item_name}</td>
+                                      <td className="py-2.5 px-2 sm:px-3 text-right pr-3 sm:pr-4 font-bold text-slate-700 whitespace-nowrap">
+                                        {raw.item_weight_type?.toLowerCase() === 'kg' || raw.item_weight_type?.toLowerCase() === 'ltr' 
+                                          ? (Number(raw.item_weight || 0) / 1000) 
+                                          : raw.item_weight} {raw.item_weight_type}
+                                      </td>
                                     </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100 font-medium">
-                                    {(prod.productionRawItems || []).map((raw: any, index: number) => (
-                                      <tr key={index} className="hover:bg-slate-50/20">
-                                        <td className="p-3 ps-4 text-slate-500">{index + 1}</td>
-                                        <td className="p-3 text-slate-800 font-bold">{raw.item_name}</td>
-                                        <td className="p-3 text-right pr-4 font-bold text-slate-700">
-                                          {raw.item_weight_type?.toLowerCase() === 'kg' || raw.item_weight_type?.toLowerCase() === 'ltr' 
-                                            ? (Number(raw.item_weight || 0) / 1000) 
-                                            : raw.item_weight} {raw.item_weight_type}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
+                          </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 rounded-xl p-4 border border-slate-150">
-                              <div>
-                                <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Total Raw Weight</span>
-                                <span className="text-sm font-bold text-slate-700">{(prod.total_raw_weight || 0) / 1000} kg</span>
-                              </div>
-                              <div>
-                                <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Total Raw Volume</span>
-                                <span className="text-sm font-bold text-slate-700">{(prod.total_raw_volume || 0) / 1000} Ltr</span>
-                              </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 rounded-xl p-4 border border-slate-150">
+                            <div>
+                              <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Total Raw Weight</span>
+                              <span className="text-sm font-bold text-slate-700">{(activeProd.total_raw_weight || 0) / 1000} kg</span>
                             </div>
+                            <div>
+                              <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Total Raw Volume</span>
+                              <span className="text-sm font-bold text-slate-700">{(activeProd.total_raw_volume || 0) / 1000} Ltr</span>
+                            </div>
+                          </div>
 
-                            {/* Production Gallery / Media */}
-                            {((prod.images && prod.images.length > 0) || (prod.videos && prod.videos.length > 0)) && (
-                              <div className="space-y-3 pt-2">
-                                <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Production Media Gallery</h5>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                                  {prod.images?.map((imgUrl: string, idx: number) => (
+                          {/* Production Gallery / Media */}
+                          {(prodImages.length > 0 || prodVideos.length > 0) && (
+                            <div className="space-y-3 pt-2">
+                              <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Production Media Gallery</h5>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                                {prodImages.map((imgUrl: string, idx: number) => {
+                                  const fullUrl = getImageUrl(imgUrl);
+                                  return (
                                     <div 
                                       key={`img-${idx}`} 
                                       className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.03] transition-all cursor-pointer relative group aspect-video flex items-center justify-center"
-                                      onClick={() => window.open(getImageUrl(imgUrl), '_blank')}
+                                      onClick={() => setActiveImageUrl(fullUrl)}
                                     >
-                                      <img src={getImageUrl(imgUrl)} alt={`Production ${idx + 1}`} className="w-full h-full object-cover" />
+                                      <img 
+                                        src={fullUrl} 
+                                        alt={`Production ${idx + 1}`} 
+                                        className="w-full h-full object-cover" 
+                                        onError={(e) => {
+                                          const target = e.currentTarget;
+                                          if (!target.dataset.tried) {
+                                            target.dataset.tried = "true";
+                                            if (imgUrl.includes("uploads/")) {
+                                              target.src = `https://files.fggroup.in/${imgUrl.substring(imgUrl.indexOf("uploads/"))}`;
+                                            }
+                                          }
+                                        }}
+                                      />
                                       <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                                         <span className="text-[10px] text-white font-bold bg-slate-900/80 px-2 py-1 rounded border border-white/20">
                                           View Image
                                         </span>
                                       </div>
                                     </div>
-                                  ))}
-                                  {prod.videos?.map((vidUrl: string, idx: number) => (
+                                  );
+                                })}
+                                {prodVideos.map((vidUrl: string, idx: number) => {
+                                  const fullUrl = getImageUrl(vidUrl);
+                                  return (
                                     <div 
                                       key={`vid-${idx}`} 
                                       className="border border-slate-150/70 rounded-xl overflow-hidden bg-white shadow-sm hover:scale-[1.03] transition-all relative aspect-video flex items-center justify-center group cursor-pointer"
-                                      onClick={() => setActiveVideoUrl(getImageUrl(vidUrl))}
+                                      onClick={() => setActiveVideoUrl(fullUrl)}
                                     >
                                       <video 
-                                        src={getImageUrl(vidUrl)} 
+                                        src={fullUrl} 
                                         className="w-full h-full object-cover pointer-events-none" 
                                         preload="metadata"
                                       />
@@ -1389,16 +2180,26 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                         Video
                                       </div>
                                     </div>
-                                  ))}
-                                </div>
+                                  );
+                                })}
                               </div>
-                            )}
-                          </div>
-                        ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   }
                   case 'lab_report': {
+                    if (selectedClient.production_process?.lab_report?.status === 'skipped') {
+                      return (
+                        <div className="flex flex-col items-center justify-center p-8 bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                            <Slash className="w-6 h-6 text-slate-500" />
+                          </div>
+                          <p className="text-sm font-bold text-slate-800">Lab Report Skipped</p>
+                        </div>
+                      );
+                    }
                     const list = detailsData?.labReports || [];
                     if (list.length === 0) {
                       return (
@@ -1409,29 +2210,87 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                         </div>
                       );
                     }
+
+                    const activeIndex = activeLabReportTab < list.length ? activeLabReportTab : 0;
+                    const activeReport = list[activeIndex] || list[0];
+
                     return (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {list.map((report: any) => (
-                          <div key={report._id} className="border border-slate-150/70 rounded-2xl overflow-hidden bg-white shadow-sm hover:scale-[1.01] transition-transform cursor-pointer relative group flex flex-col" onClick={() => window.open(getImageUrl(report.image), '_blank')}>
-                            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/20">
-                              <div className="space-y-0.5">
-                                <h4 className="text-xs font-bold text-slate-800">{report.productName}</h4>
-                                <p className="text-[10px] text-slate-400">Tested: {formatDateReadable(report.createdAt)}</p>
-                              </div>
-                              <span className="p-1 rounded-md bg-emerald-50 text-emerald-600 border border-emerald-100/50">
-                                <ShieldCheck className="w-3.5 h-3.5" />
+                      <div className="space-y-6">
+                        {/* Product Tabs Header if multiple reports exist */}
+                        {list.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectLabReportTab(activeIndex - 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+
+                            <div
+                              ref={labReportTabScrollRef}
+                              onScroll={() => handleTabScroll(labReportTabScrollRef.current, list.length, setActiveLabReportTab)}
+                              className="bg-slate-100/80 p-1.5 rounded-2xl flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth border border-slate-200/80 shadow-2xs flex-1 snap-x snap-mandatory min-w-0"
+                            >
+                              {list.map((reportItem: any, idx: number) => {
+                                const productName = getValidProductName(reportItem, idx);
+                                const isActive = idx === activeIndex;
+
+                                return (
+                                  <button
+                                    key={reportItem._id || idx}
+                                    type="button"
+                                    onClick={() => selectLabReportTab(idx, list.length)}
+                                    className={`flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all shrink-0 cursor-pointer w-full sm:w-[calc(33.333%-0.375rem)] lg:w-[calc(25%-0.375rem)] snap-center sm:snap-start truncate ${
+                                      isActive
+                                        ? "bg-white text-[#20b657] shadow-sm border border-[#bbf0cb] ring-2 ring-[#20b657]/10"
+                                        : "text-slate-600 hover:text-slate-900 hover:bg-white/60 font-bold"
+                                    }`}
+                                  >
+                                    <Cpu className={`w-4 h-4 shrink-0 ${isActive ? "text-[#20b657]" : "text-slate-400"}`} />
+                                    <span className="truncate">{productName}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => selectLabReportTab(activeIndex + 1, list.length)}
+                              className="h-9 w-9 rounded-xl border-slate-200 bg-white text-slate-600 hover:bg-slate-50 shrink-0 shadow-xs"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Active Lab Report Card */}
+                        <div 
+                          className="border border-slate-150/70 rounded-2xl overflow-hidden bg-white shadow-sm hover:scale-[1.005] transition-all cursor-pointer relative group flex flex-col max-w-2xl mx-auto"
+                          onClick={() => setActiveImageUrl(getImageUrl(activeReport.image))}
+                        >
+                          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/40">
+                            <div className="space-y-0.5">
+                              <h4 className="text-sm font-bold text-slate-800">{getValidProductName(activeReport, activeIndex, 'Lab Report')}</h4>
+                              <p className="text-xs text-slate-400">Tested: {formatModalDateReadable(activeReport.createdAt)}</p>
+                            </div>
+                            <span className="p-1.5 rounded-lg bg-[#e8f9ee] text-[#20b657] border border-[#bbf0cb] flex items-center gap-1 text-xs font-bold">
+                              <ShieldCheck className="w-4 h-4" /> Passed
+                            </span>
+                          </div>
+                          <div className="bg-slate-50/50 flex items-center justify-center p-4 min-h-[280px] max-h-[420px] relative">
+                            <img src={getImageUrl(activeReport.image)} alt="Lab Certificate" className="max-h-[380px] max-w-full object-contain rounded-lg shadow-sm" />
+                            <div className="absolute inset-0 bg-slate-950/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
+                              <span className="text-xs text-white font-bold bg-slate-900/80 px-4 py-2 rounded-xl border border-white/25 flex items-center gap-2 shadow-lg">
+                                <ExternalLink className="w-4 h-4" /> View Full Certificate
                               </span>
                             </div>
-                            <div className="bg-slate-50/50 flex-1 flex items-center justify-center p-3 h-48">
-                              <img src={getImageUrl(report.image)} alt="Lab Certificate" className="max-h-full max-w-full object-contain" />
-                              <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                                <span className="text-xs text-white font-bold bg-slate-900/80 px-3 py-1.5 rounded-lg border border-white/25 flex items-center gap-1">
-                                  <ExternalLink className="w-3 h-3" /> View Large Report
-                                </span>
-                              </div>
-                            </div>
                           </div>
-                        ))}
+                        </div>
                       </div>
                     );
                   }
@@ -1456,7 +2315,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                               </div>
                               <div className="space-y-0.5">
                                 <h4 className="text-xs font-bold text-slate-800">{qc.fileName}</h4>
-                                <p className="text-[10px] text-slate-450">Uploaded: {formatDateReadable(qc.createdAt)}</p>
+                                <p className="text-[10px] text-slate-450">Uploaded: {formatModalDateReadable(qc.createdAt)}</p>
                               </div>
                             </div>
                             <div className="flex items-center gap-3 shrink-0">
@@ -1513,7 +2372,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                               </div>
                               <div>
                                 <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Total Value</span>
-                                <span className="text-xs font-bold text-emerald-600">₹ {disp.orderValue}</span>
+                                <span className="text-xs font-bold text-[#20b657]">₹ {disp.orderValue}</span>
                               </div>
                             </div>
 
@@ -1528,7 +2387,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                                 <span className="text-[10px] uppercase font-mono tracking-wider font-bold text-slate-400 block">Dispatch Date</span>
                                 <span className="text-xs font-bold text-slate-650 flex items-center gap-1 mt-1">
                                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                                  {formatDateReadable(disp.dispatchDate || disp.updatedAt)}
+                                  {formatModalDateReadable(disp.dispatchDate || disp.updatedAt)}
                                 </span>
                               </div>
                             </div>
@@ -1559,28 +2418,154 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
           </div>
         </div>
       )}
-      {/* Video Modal Lightbox */}
+
+      {/* Video Lightbox Modal */}
       {activeVideoUrl && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/85 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setActiveVideoUrl(null)}>
-          <div className="relative w-full max-w-4xl px-4 flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-            <button 
-              onClick={() => setActiveVideoUrl(null)}
-              className="absolute top-[-50px] right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white hover:scale-105 active:scale-95 transition-all border border-white/10 shadow-lg"
-              aria-label="Close video"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <div className="w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-white/10 aspect-video flex items-center justify-center">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 p-4 sm:p-6" onClick={() => setActiveVideoUrl(null)}>
+          <div className="relative bg-slate-900/95 rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-white/15 max-w-[92vw] max-h-[85vh] m-auto flex flex-col p-2.5 sm:p-3.5" onClick={(e) => e.stopPropagation()}>
+            {/* Header / Close Option inside Modal */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 mb-2">
+              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Play className="w-3.5 h-3.5 text-[#20b657]" /> Production Video Preview
+              </span>
+              <button 
+                onClick={() => setActiveVideoUrl(null)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all border border-white/10 cursor-pointer flex items-center gap-1 text-xs font-bold px-2.5"
+                aria-label="Close video"
+              >
+                <X className="w-4 h-4" />
+                <span>Close</span>
+              </button>
+            </div>
+            <div className="inline-flex items-center justify-center overflow-hidden rounded-xl bg-black">
               <video 
                 src={activeVideoUrl} 
                 controls 
                 autoPlay 
-                className="w-full h-full object-contain"
+                className="max-h-[72vh] max-w-[88vw] w-auto h-auto rounded-xl object-contain"
               />
             </div>
           </div>
         </div>
       )}
-    </div>
+
+      {/* Image Lightbox Modal */}
+      {activeImageUrl && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 p-4 sm:p-6" onClick={() => setActiveImageUrl(null)}>
+          <div className="relative bg-slate-900/95 rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl border border-white/15 max-w-[92vw] max-h-[88vh] m-auto flex flex-col p-2.5 sm:p-3.5" onClick={(e) => e.stopPropagation()}>
+            {/* Header / Close Option inside Modal */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 mb-2">
+              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-[#20b657]" /> Production Photo Preview
+              </span>
+              <button 
+                onClick={() => setActiveImageUrl(null)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all border border-white/10 cursor-pointer flex items-center gap-1 text-xs font-bold px-2.5"
+                aria-label="Close image"
+              >
+                <X className="w-4 h-4" />
+                <span>Close</span>
+              </button>
+            </div>
+            <div className="inline-flex items-center justify-center overflow-hidden rounded-xl bg-black/40">
+              <img 
+                src={activeImageUrl} 
+                alt="Production Media Preview" 
+                className="max-w-[88vw] max-h-[68vh] w-auto h-auto object-contain rounded-xl"
+              />
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open(activeImageUrl, '_blank')}
+                className="text-xs font-bold text-white bg-white/10 border-white/20 hover:bg-white/20 hover:text-white h-8"
+              >
+                <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open Original
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const filename = activeImageUrl.split('/').pop()?.split('?')[0] || 'production-image.jpg';
+                  handleDownloadFile(activeImageUrl, filename);
+                }}
+                className="btn-target-brand text-xs font-bold h-8"
+              >
+                <Download className="w-3.5 h-3.5 mr-1" /> Download Image
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tax Invoice PDF Viewer Modal */}
+      {showInvoiceModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[9999] flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200" onClick={() => setShowInvoiceModal(false)}>
+          <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 max-w-5xl w-full h-[85dvh] sm:h-[85vh] max-h-[85dvh] sm:max-h-[85vh] m-auto shadow-2xl relative flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            
+            {/* Modal Header */}
+            <div className="px-4 py-3 sm:px-6 sm:py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-[#99c229]" />
+                <h3 className="text-sm sm:text-base font-bold text-slate-800">
+                  Tax Invoice #{selectedClient.invoice_number || `INV-${selectedClient.common_id.slice(-6)}`}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setShowInvoiceModal(false)}
+                className="p-1.5 rounded-xl border border-slate-100 text-slate-400 hover:text-slate-600 bg-white shadow-sm"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Original PDF Viewer Frame for Android & iOS */}
+            <div className="flex-1 min-h-0 bg-slate-100 overflow-hidden relative w-full h-full flex items-center justify-center">
+              <object
+                data={`${getApiBaseUrl()}/gn-clients/download-invoice?clientId=${selectedClient._id}&view=true#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                type="application/pdf"
+                className="w-full h-full border-0 overflow-hidden block"
+                style={{ width: '100%', height: '100%', border: '0', overflow: 'hidden' }}
+              >
+                <iframe
+                  src={`${getApiBaseUrl()}/gn-clients/download-invoice?clientId=${selectedClient._id}&view=true#toolbar=0&navpanes=0&scrollbar=0&view=Fit`}
+                  className="w-full h-full border-0 overflow-hidden block"
+                  style={{ width: '100%', height: '100%', border: '0', overflow: 'hidden' }}
+                  title={`Tax Invoice #${selectedClient.invoice_number || selectedClient.common_id.slice(-6)}`}
+                />
+              </object>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="px-4 py-3 sm:px-6 sm:py-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50 shrink-0">
+              <Button 
+                variant="outline"
+                onClick={() => setShowInvoiceModal(false)}
+                className="text-xs font-bold"
+              >
+                Close
+              </Button>
+              <div className="flex flex-wrap gap-2">
+
+                <Button
+                  variant="outline"
+                  onClick={handleViewInvoice}
+                  className="text-xs font-bold text-[#7aa823] border-[#ddf0af] bg-[#f2f9eb]"
+                >
+                  <Eye className="w-3.5 h-3.5 mr-1" /> Open in New Tab
+                </Button>
+                <Button
+                  onClick={handleDownloadInvoice}
+                  className="btn-target-brand text-xs font-bold"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1" /> Download Invoice
+                </Button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </main>
   );
 }

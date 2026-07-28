@@ -1,22 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-primary-50: #ecfdf5;
-  --color-primary-100: #d1fae5;
-  --color-primary-200: #a7f3d0;
-  --color-primary-300: #6ee7b7;
-  --color-primary-400: #34d399;
-  --color-primary-500: #10b981;
-  --color-primary-600: #059669;
-  --color-primary-700: #047857;
-  --color-primary-800: #065f46;
-  --color-primary-900: #064e3b;
+  --color-primary-50: #f7faf0;
+  --color-primary-100: #edf5dc;
+  --color-primary-200: #dbebbe;
+  --color-primary-300: #c2dd94;
+  --color-primary-400: #a7cf66;
+  --color-primary-500: #99c229;
+  --color-primary-600: #83ab1f;
+  --color-primary-700: #688a14;
+  --color-primary-800: #506a0d;
+  --color-primary-900: #3c5008;
+
+  --color-emerald-50: #f7faf0;
+  --color-emerald-100: #edf5dc;
+  --color-emerald-200: #dbebbe;
+  --color-emerald-300: #c2dd94;
+  --color-emerald-400: #a7cf66;
+  --color-emerald-500: #99c229;
+  --color-emerald-600: #83ab1f;
+  --color-emerald-700: #688a14;
+  --color-emerald-800: #506a0d;
+  --color-emerald-900: #3c5008;
+
+  --font-sans: "Inter", sans-serif;
 }
 
 @layer base {
+  html, body, #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+
   body {
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: #fafcf8; /* Extremely premium soft off-white with subtle olive tint */
+    color: #1e293b;
     font-family: 'Inter', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
