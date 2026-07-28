@@ -8,8 +8,6 @@ import {
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { toast } from "sonner";
-import { BASE_API_URL } from "../config";
-
 import "./Dashboard.css";
 
 interface ProductItem {

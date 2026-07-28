@@ -5,8 +5,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { Input } from "../components/ui/input";
 import { Phone, KeyRound, Loader2 } from "lucide-react";
 
-import { BASE_API_URL } from "../config";
-
 interface LoginProps {
   onLoginSuccess: (mobile: string) => void;
 }
