@@ -115,11 +115,7 @@ const getMediaArray = (item: any, possibleKeys: string[]): string[] => {
   return [];
 };
 
-const getApiBaseUrl = () => {
-  if (import.meta.env.PROD) return "/public/v1";
-  const host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-  return `http://${host}:89/public/v1`;
-};
+import { getApiBaseUrl } from "../config";
 
 export default function Dashboard({ mobileNumber, setClientName }: DashboardProps) {
   const [clients, setClients] = useState<ClientData[]>([]);

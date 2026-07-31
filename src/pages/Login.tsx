@@ -5,6 +5,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { Input } from "../components/ui/input";
 import { Phone, KeyRound, Loader2 } from "lucide-react";
 
+import { getApiBaseUrl } from "../config";
+
 interface LoginProps {
   onLoginSuccess: (mobile: string) => void;
 }
@@ -19,9 +21,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [timer, setTimer] = useState<number>(0);
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
-  const baseApiUrl = import.meta.env.PROD
-    ? "/public/v1"
-    : `http://${typeof window !== "undefined" ? window.location.hostname : "localhost"}:89/public/v1`;
+  const baseApiUrl = getApiBaseUrl();
 
   // Countdown timer for Resend OTP
   useEffect(() => {
