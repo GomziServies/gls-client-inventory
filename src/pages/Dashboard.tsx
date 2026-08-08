@@ -2077,7 +2077,8 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                             </div>
                           </div>
 
-                          {/* Raw Materials details */}
+                          {/* Raw Materials details - Commented out for client inventory view */}
+                          {/* 
                           <div className="space-y-3">
                             <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Raw Materials Blending details</h5>
                             <div className="border border-slate-150/70 rounded-xl overflow-hidden w-full bg-white shadow-sm">
@@ -2116,6 +2117,7 @@ export default function Dashboard({ mobileNumber, setClientName }: DashboardProp
                               <span className="text-sm font-bold text-slate-700">{(activeProd.total_raw_volume || 0) / 1000} Ltr</span>
                             </div>
                           </div>
+                          */}
 
                           {/* Production Gallery / Media */}
                           {(prodImages.length > 0 || prodVideos.length > 0) && (
